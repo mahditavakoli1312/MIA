@@ -10,8 +10,16 @@ import ir.mahditavakoli.mia.network.supabase.SupabaseApi
 /**
  * Executes a parsed [VoiceCommandIntent] against the Supabase REST (PostgREST) backend.
  * Project lookups happen by name because the LLM only ever gives us names, not ids.
+ *
+ * Creating a project also creates a matching GitHub repository, and adding a task also
+ * opens a GitHub issue in that repository. These GitHub side-effects are best-effort: a
+ * failure (or no token configured) never fails the underlying Supabase action — it just
+ * changes the confirmation message.
  */
-class IntentExecutionRepository(private val api: SupabaseApi) {
+class IntentExecutionRepository(
+    private val api: SupabaseApi,
+    private val gitHub: GitHubRepository
+) {
 
     suspend fun execute(intent: VoiceCommandIntent): Result<String> = runCatching {
         when (intent.actionType) {
@@ -24,7 +32,12 @@ class IntentExecutionRepository(private val api: SupabaseApi) {
 
     private suspend fun createProject(intent: VoiceCommandIntent): String {
         api.createProject(CreateProjectBody(name = intent.projectName))
-        return "پروژه «${intent.projectName}» ساخته شد"
+        val base = "پروژه «${intent.projectName}» ساخته شد"
+        if (!gitHub.isConfigured) return base
+        return gitHub.createRepoForProject(intent.projectName).fold(
+            onSuccess = { repo -> "$base و ریپازیتوری «${repo.name}» در گیت‌هاب ایجاد شد" },
+            onFailure = { "$base (ساخت ریپازیتوری گیت‌هاب ناموفق بود: ${it.message})" }
+        )
     }
 
     private suspend fun deleteProject(intent: VoiceCommandIntent): String {
@@ -37,7 +50,14 @@ class IntentExecutionRepository(private val api: SupabaseApi) {
         val taskTitle = requireNotNull(intent.taskTitle) { "عنوان تسک مشخص نشده است" }
         val project = findProjectOrThrow(intent.projectName)
         api.createTask(CreateTaskBody(projectId = requireNotNull(project.id), title = taskTitle, dueDate = intent.dueDate))
-        return "تسک «$taskTitle» به پروژه «${intent.projectName}» اضافه شد"
+        val base = "تسک «$taskTitle» به پروژه «${intent.projectName}» اضافه شد"
+        if (!gitHub.isConfigured) return base
+        // Use the canonical stored project name so the repo name matches the one created
+        // with the project (the LLM's spoken name may differ by Persian script variants).
+        return gitHub.createIssueForTask(project.name, taskTitle, intent.dueDate).fold(
+            onSuccess = { issue -> "$base و ایشو #${issue.number} در گیت‌هاب ثبت شد" },
+            onFailure = { "$base (ثبت ایشو گیت‌هاب ناموفق بود: ${it.message})" }
+        )
     }
 
     private suspend fun removeTask(intent: VoiceCommandIntent): String {

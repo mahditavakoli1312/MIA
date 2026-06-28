@@ -3,6 +3,7 @@ package ir.mahditavakoli.mia.network
 import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
+import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseApi
 import kotlinx.serialization.json.Json
@@ -51,6 +52,15 @@ object NetworkModule {
         chain.proceed(request)
     }
 
+    private val gitHubAuthInterceptor = Interceptor { chain ->
+        val request = chain.request().newBuilder()
+            .addHeader("Authorization", "Bearer ${BuildConfig.GITHUB_TOKEN}")
+            .addHeader("Accept", "application/vnd.github+json")
+            .addHeader("X-GitHub-Api-Version", "2022-11-28")
+            .build()
+        chain.proceed(request)
+    }
+
     private val supabaseAuthInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
             .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
@@ -66,6 +76,24 @@ object NetworkModule {
             .client(
                 OkHttpClient.Builder()
                     .addInterceptor(openRouterAuthInterceptor)
+                    .addInterceptor(loggingInterceptor)
+                    .addInterceptor(chuckerInterceptor)
+                    .build()
+            )
+            .addConverterFactory(converterFactory)
+            .build()
+            .create()
+    }
+
+    /** True only when a GitHub token is configured; callers skip GitHub mirroring otherwise. */
+    val isGitHubConfigured: Boolean get() = BuildConfig.GITHUB_TOKEN.isNotBlank()
+
+    val gitHubApi: GitHubApi by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://api.github.com/")
+            .client(
+                OkHttpClient.Builder()
+                    .addInterceptor(gitHubAuthInterceptor)
                     .addInterceptor(loggingInterceptor)
                     .addInterceptor(chuckerInterceptor)
                     .build()

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
+import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.IntentExecutionRepository
 import ir.mahditavakoli.mia.data.repository.ProjectRepository
 import ir.mahditavakoli.mia.data.repository.VoiceIntentClassifier
@@ -27,7 +28,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val speechRecognizerManager = SpeechRecognizerManager(application)
     private val intentClassifier = VoiceIntentClassifier(NetworkModule.openRouterApi, NetworkModule.json)
-    private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi)
+    private val gitHubRepository = GitHubRepository(
+        api = NetworkModule.gitHubApi,
+        isConfigured = NetworkModule.isGitHubConfigured
+    )
+    private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi, gitHubRepository)
     private val projectRepository = ProjectRepository(NetworkModule.supabaseApi)
 
     private val _uiState = MutableStateFlow(MainUiState())
