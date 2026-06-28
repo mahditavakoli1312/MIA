@@ -21,7 +21,11 @@ class SpeechRecognizerManager(private val context: Context) {
     sealed interface State {
         data object Idle : State
         data object Listening : State
-        data class Result(val text: String) : State
+        // N-best transcriptions, most-likely first. We keep all of them (not just the top
+        // hit) so the downstream LLM can pick the candidate that actually makes sense given
+        // the user's existing projects — Persian STT often mishears the right word but still
+        // includes it lower in this list.
+        data class Result(val candidates: List<String>) : State
         data class Error(val message: String) : State
     }
 
@@ -65,7 +69,10 @@ class SpeechRecognizerManager(private val context: Context) {
             // Plain SpeechRecognizer is free either way — "no extra cost" just means no paid
             // third-party STT API, which this still satisfies whether it resolves on-device or online.
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            // Ask for several hypotheses, not just the single best one. The extra candidates
+            // are forwarded to the intent classifier so it can disambiguate mis-hearings
+            // against the real project/task names instead of failing on a wrong top guess.
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, MAX_RESULTS)
         }
         _state.value = State.Listening
         Log.d(TAG, "Calling SpeechRecognizer.startListening() with language=fa-IR")
@@ -119,14 +126,16 @@ class SpeechRecognizerManager(private val context: Context) {
         }
 
         override fun onResults(results: Bundle?) {
-            val text = results
+            val candidates = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.firstOrNull()
+                ?.map { it.trim() }
+                ?.filter { it.isNotBlank() }
+                ?.distinct()
                 .orEmpty()
-            Log.d(TAG, "onResults text=\"$text\"")
+            Log.d(TAG, "onResults candidates=$candidates")
             timeoutHandler.removeCallbacks(timeoutRunnable)
-            _state.value = if (text.isNotBlank()) {
-                State.Result(text)
+            _state.value = if (candidates.isNotEmpty()) {
+                State.Result(candidates)
             } else {
                 State.Error("متوجه نشدم، دوباره تلاش کنید")
             }
@@ -163,5 +172,6 @@ class SpeechRecognizerManager(private val context: Context) {
         const val TAG = "MIA_Speech"
         const val LISTENING_TIMEOUT_MS = 12_000L
         const val STOP_GRACE_MS = 4_000L
+        const val MAX_RESULTS = 5
     }
 }

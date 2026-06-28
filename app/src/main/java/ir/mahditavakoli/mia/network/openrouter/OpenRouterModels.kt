@@ -11,10 +11,10 @@ data class ChatMessage(
 
 @Serializable
 data class ChatCompletionRequest(
-    val model: String = "anthropic/claude-3-haiku",
+    val model: String = "gpt-4o-mini",
     val messages: List<ChatMessage>,
     val temperature: Double = 0.0,
-    @SerialName("max_tokens") val maxTokens: Int = 300
+    @SerialName("max_tokens") val maxTokens: Int = 150
 )
 
 @Serializable

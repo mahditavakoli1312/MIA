@@ -4,6 +4,6 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 
 interface OpenRouterApi {
-    @POST("api/v1/chat/completions")
+    @POST("v1/chat/completions")
     suspend fun classifyIntent(@Body request: ChatCompletionRequest): ChatCompletionResponse
 }

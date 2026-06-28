@@ -74,7 +74,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(recordingState = RecordingState.Idle) }
             is SpeechRecognizerManager.State.Listening ->
                 _uiState.update { it.copy(recordingState = RecordingState.Listening) }
-            is SpeechRecognizerManager.State.Result -> processTranscript(state.text)
+            is SpeechRecognizerManager.State.Result -> processCandidates(state.candidates)
             is SpeechRecognizerManager.State.Error -> {
                 _uiState.update { it.copy(recordingState = RecordingState.Idle) }
                 emitEvent(state.message)
@@ -82,10 +82,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun processTranscript(transcript: String) {
+    private fun processCandidates(candidates: List<String>) {
         _uiState.update { it.copy(recordingState = RecordingState.Processing) }
         viewModelScope.launch {
-            intentClassifier.classify(transcript).fold(
+            // Pass the currently-loaded projects so the model can resolve spoken names
+            // against real data instead of guessing from the raw transcription alone.
+            intentClassifier.classify(candidates, _uiState.value.projects).fold(
                 onSuccess = { intent -> executeIntent(intent) },
                 onFailure = { error ->
                     _uiState.update { it.copy(recordingState = RecordingState.Idle) }

@@ -51,7 +51,22 @@ class IntentExecutionRepository(private val api: SupabaseApi) {
         return "تسک «$taskTitle» حذف شد"
     }
 
-    private suspend fun findProjectOrThrow(name: String): Project =
-        api.findProjectsByName("eq.$name").firstOrNull()
+    private suspend fun findProjectOrThrow(name: String): Project {
+        // Fast path: exact match (what the LLM should normally return now that it gets the
+        // real project list as context).
+        api.findProjectsByName("eq.$name").firstOrNull()?.let { return it }
+        // Fallback: the model/transcription may still differ from the stored name by Persian
+        // script variants (ی/ي, ک/ك), ZWNJ, or spacing. Compare normalized forms client-side.
+        val target = normalizePersian(name)
+        return api.getProjects().firstOrNull { normalizePersian(it.name) == target }
             ?: error("پروژه‌ای با نام «$name» پیدا نشد")
+    }
+
+    private fun normalizePersian(value: String): String = value
+        .replace('ي', 'ی') // Arabic Yeh -> Persian Yeh
+        .replace('ك', 'ک') // Arabic Kaf -> Persian Keheh
+        .replace("‌", "")        // ZWNJ / نیم‌فاصله
+        .replace(Regex("\\s+"), "")    // ignore all spacing differences
+        .trim()
+        .lowercase()
 }

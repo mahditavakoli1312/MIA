@@ -46,10 +46,7 @@ object NetworkModule {
 
     private val openRouterAuthInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
-            .addHeader("Authorization", "Bearer ${BuildConfig.OPENROUTER_API_KEY}")
-            // Optional, recommended by OpenRouter for attribution/rate-limit analytics.
-            .addHeader("HTTP-Referer", "https://github.com/mahditavakoli/mia")
-            .addHeader("X-Title", "MIA Voice Task Manager")
+            .addHeader("Authorization", "Bearer ${BuildConfig.GAPGPT_API_KEY}")
             .build()
         chain.proceed(request)
     }
@@ -65,7 +62,7 @@ object NetworkModule {
 
     val openRouterApi: OpenRouterApi by lazy {
         Retrofit.Builder()
-            .baseUrl("https://openrouter.ai/")
+            .baseUrl("https://api.gapgpt.app/")
             .client(
                 OkHttpClient.Builder()
                     .addInterceptor(openRouterAuthInterceptor)
