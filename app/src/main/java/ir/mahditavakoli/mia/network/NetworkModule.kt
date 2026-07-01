@@ -3,9 +3,11 @@ package ir.mahditavakoli.mia.network
 import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
+import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseApi
+import ir.mahditavakoli.mia.network.supabase.SupabaseAuthApi
 import kotlinx.serialization.json.Json
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -22,8 +24,13 @@ object NetworkModule {
     // is ever touched — needed for the Chucker HTTP inspector below.
     private lateinit var appContext: Context
 
+    /** Holds the signed-in user's session; read live by the Supabase REST interceptor. */
+    lateinit var sessionManager: SessionManager
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
+        sessionManager = SessionManager(appContext)
     }
 
     val json: Json = Json {
@@ -61,11 +68,24 @@ object NetworkModule {
         chain.proceed(request)
     }
 
+    // REST calls: authenticate as the signed-in user when there's a session, so RLS
+    // scopes every row to them. Falls back to the anon key when signed out (e.g. before
+    // login), which RLS will reject for protected tables — that's the intended behavior.
+    private val supabaseRestInterceptor = Interceptor { chain ->
+        val bearer = sessionManager.accessToken ?: BuildConfig.SUPABASE_ANON_KEY
+        val request = chain.request().newBuilder()
+            .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+            .addHeader("Authorization", "Bearer $bearer")
+            .addHeader("Prefer", "return=representation")
+            .build()
+        chain.proceed(request)
+    }
+
+    // Auth (GoTrue) calls happen before the user has a token, so they always use the anon key.
     private val supabaseAuthInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
             .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
             .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
-            .addHeader("Prefer", "return=representation")
             .build()
         chain.proceed(request)
     }
@@ -111,6 +131,22 @@ object NetworkModule {
         val supabaseUrl = BuildConfig.SUPABASE_URL.ifBlank { "https://supabase-not-configured.invalid" }
         Retrofit.Builder()
             .baseUrl("$supabaseUrl/rest/v1/")
+            .client(
+                OkHttpClient.Builder()
+                    .addInterceptor(supabaseRestInterceptor)
+                    .addInterceptor(loggingInterceptor)
+                    .addInterceptor(chuckerInterceptor)
+                    .build()
+            )
+            .addConverterFactory(converterFactory)
+            .build()
+            .create()
+    }
+
+    val supabaseAuthApi: SupabaseAuthApi by lazy {
+        val supabaseUrl = BuildConfig.SUPABASE_URL.ifBlank { "https://supabase-not-configured.invalid" }
+        Retrofit.Builder()
+            .baseUrl("$supabaseUrl/auth/v1/")
             .client(
                 OkHttpClient.Builder()
                     .addInterceptor(supabaseAuthInterceptor)

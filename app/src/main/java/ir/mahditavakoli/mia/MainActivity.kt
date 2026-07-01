@@ -4,6 +4,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import ir.mahditavakoli.mia.network.NetworkModule
+import ir.mahditavakoli.mia.ui.auth.LoginScreen
 import ir.mahditavakoli.mia.ui.main.MainScreen
 import ir.mahditavakoli.mia.ui.theme.MIATheme
 
@@ -13,7 +17,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MIATheme {
-                MainScreen()
+                val isLoggedIn by NetworkModule.sessionManager.isLoggedIn.collectAsState()
+                if (isLoggedIn) {
+                    MainScreen(onLogout = { NetworkModule.sessionManager.clear() })
+                } else {
+                    LoginScreen()
+                }
             }
         }
     }
