@@ -28,14 +28,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val speechRecognizerManager = SpeechRecognizerManager(application)
     private val intentClassifier = VoiceIntentClassifier(NetworkModule.openRouterApi, NetworkModule.json)
+    private val secretStore = NetworkModule.secretStore
     private val gitHubRepository = GitHubRepository(
         api = NetworkModule.gitHubApi,
-        isConfigured = NetworkModule.isGitHubConfigured
+        isConfigured = NetworkModule.isGitHubConfigured,
+        bootstrapper = NetworkModule.repoBootstrapper,
+        secretStore = secretStore
     )
     private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi, gitHubRepository)
     private val projectRepository = ProjectRepository(NetworkModule.supabaseApi)
 
-    private val _uiState = MutableStateFlow(MainUiState())
+    private val _uiState = MutableStateFlow(
+        MainUiState(
+            agentHandledByDefault = secretStore.agentHandledByDefault,
+            geminiApiKey = secretStore.geminiApiKeyOverride
+        )
+    )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
     val micAmplitude: StateFlow<Float> = speechRecognizerManager.amplitude
@@ -47,8 +55,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshProjects()
+        verifyGitHubToken()
         viewModelScope.launch {
             speechRecognizerManager.state.collect { state -> onSpeechState(state) }
+        }
+    }
+
+    // Settings ----------------------------------------------------------------
+
+    /** Toggle whether new voice-created tasks are handed to the agent. Persisted immediately. */
+    fun onAgentHandledChange(enabled: Boolean) {
+        secretStore.agentHandledByDefault = enabled
+        _uiState.update { it.copy(agentHandledByDefault = enabled) }
+    }
+
+    fun onGeminiApiKeyChange(value: String) {
+        _uiState.update { it.copy(geminiApiKey = value) }
+    }
+
+    /** Persist the Gemini API key entered in Settings (used for the repo Actions secret). */
+    fun saveGeminiApiKey() {
+        secretStore.saveGeminiApiKey(_uiState.value.geminiApiKey)
+        emitEvent("کلید Gemini ذخیره شد")
+    }
+
+    // Warn when the GitHub token can't push workflow files (missing `workflow` scope).
+    private fun verifyGitHubToken() {
+        if (!gitHubRepository.isConfigured) return
+        viewModelScope.launch {
+            gitHubRepository.verifyTokenScopes().onSuccess { check ->
+                if (check.determinable && !check.hasWorkflow) {
+                    emitEvent(
+                        "توکن گیت‌هاب دسترسی «workflow» ندارد؛ بارگذاری فایل ورک‌فلوی ایجنت ناموفق خواهد بود."
+                    )
+                }
+            }
         }
     }
 
@@ -103,7 +144,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun executeIntent(intent: VoiceCommandIntent) {
-        val result = intentExecutionRepository.execute(intent)
+        val result = intentExecutionRepository.execute(intent, _uiState.value.agentHandledByDefault)
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
         result.fold(
             onSuccess = { message ->

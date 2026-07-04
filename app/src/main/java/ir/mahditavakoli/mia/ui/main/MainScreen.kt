@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
@@ -58,6 +59,7 @@ fun MainScreen(
     val amplitude by viewModel.micAmplitude.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
+    var showSettings by rememberSaveable { mutableStateOf(false) }
 
     var hasRecordPermission by rememberSaveable {
         mutableStateOf(
@@ -84,6 +86,12 @@ fun MainScreen(
                 TopAppBar(
                     title = { Text("پروژه‌های من") },
                     actions = {
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                imageVector = Icons.Filled.Settings,
+                                contentDescription = "تنظیمات"
+                            )
+                        }
                         IconButton(onClick = onLogout) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Logout,
@@ -156,6 +164,17 @@ fun MainScreen(
                     StatusBanner(uiState.recordingState)
                 }
             }
+        }
+
+        if (showSettings) {
+            SettingsDialog(
+                agentHandledByDefault = uiState.agentHandledByDefault,
+                geminiApiKey = uiState.geminiApiKey,
+                onAgentHandledChange = viewModel::onAgentHandledChange,
+                onGeminiApiKeyChange = viewModel::onGeminiApiKeyChange,
+                onSaveGeminiApiKey = viewModel::saveGeminiApiKey,
+                onDismiss = { showSettings = false }
+            )
         }
     }
 }

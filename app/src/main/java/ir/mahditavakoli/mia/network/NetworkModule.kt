@@ -3,8 +3,12 @@ package ir.mahditavakoli.mia.network
 import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
+import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.github.GitHubApi
+import ir.mahditavakoli.mia.security.AndroidBase64Encoder
+import ir.mahditavakoli.mia.security.LibsodiumSecretEncryptor
+import ir.mahditavakoli.mia.security.SecretStore
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseAuthApi
@@ -28,9 +32,28 @@ object NetworkModule {
     lateinit var sessionManager: SessionManager
         private set
 
+    /** Encrypted store for the runtime Gemini API key + the agent-handled default toggle. */
+    lateinit var secretStore: SecretStore
+        private set
+
     fun init(context: Context) {
         appContext = context.applicationContext
         sessionManager = SessionManager(appContext)
+        secretStore = SecretStore(appContext)
+    }
+
+    /** The bundled GitHub Actions workflow that gets uploaded to every new repo. */
+    fun readWorkflowYaml(): String =
+        appContext.assets.open("agent-issue-worker.yml").bufferedReader().use { it.readText() }
+
+    /** Wires new repos up to the Gemini agent (workflow, labels, secret). */
+    val repoBootstrapper: RepoBootstrapper by lazy {
+        RepoBootstrapper(
+            api = gitHubApi,
+            base64 = AndroidBase64Encoder,
+            encryptor = LibsodiumSecretEncryptor,
+            workflowYaml = readWorkflowYaml()
+        )
     }
 
     val json: Json = Json {

@@ -21,11 +21,15 @@ class IntentExecutionRepository(
     private val gitHub: GitHubRepository
 ) {
 
-    suspend fun execute(intent: VoiceCommandIntent): Result<String> = runCatching {
+    /**
+     * @param agentHandled whether a created task should be opened as an agent issue
+     *        (labeled `by-agent` so the Gemini CI workflow runs). Ignored by non-task actions.
+     */
+    suspend fun execute(intent: VoiceCommandIntent, agentHandled: Boolean): Result<String> = runCatching {
         when (intent.actionType) {
             ActionType.CREATE_PROJECT -> createProject(intent)
             ActionType.DELETE_PROJECT -> deleteProject(intent)
-            ActionType.ADD_TASK -> addTask(intent)
+            ActionType.ADD_TASK -> addTask(intent, agentHandled)
             ActionType.REMOVE_TASK -> removeTask(intent)
         }
     }
@@ -35,7 +39,12 @@ class IntentExecutionRepository(
         val base = "پروژه «${intent.projectName}» ساخته شد"
         if (!gitHub.isConfigured) return base
         return gitHub.createRepoForProject(intent.projectName).fold(
-            onSuccess = { repo -> "$base و ریپازیتوری «${repo.name}» در گیت‌هاب ایجاد شد" },
+            onSuccess = { result ->
+                val created = "$base و ریپازیتوری «${result.repo.name}» در گیت‌هاب ایجاد شد"
+                // Repo exists, but some agent-wiring step (workflow/label/secret) may have failed.
+                if (result.warnings.isEmpty()) created
+                else "$created (هشدار پیکربندی ایجنت: ${result.warnings.joinToString("؛ ")})"
+            },
             onFailure = { "$base (ساخت ریپازیتوری گیت‌هاب ناموفق بود: ${it.message})" }
         )
     }
@@ -46,7 +55,7 @@ class IntentExecutionRepository(
         return "پروژه «${intent.projectName}» حذف شد"
     }
 
-    private suspend fun addTask(intent: VoiceCommandIntent): String {
+    private suspend fun addTask(intent: VoiceCommandIntent, agentHandled: Boolean): String {
         val taskTitle = requireNotNull(intent.taskTitle) { "عنوان تسک مشخص نشده است" }
         val project = findProjectOrThrow(intent.projectName)
         api.createTask(CreateTaskBody(projectId = requireNotNull(project.id), title = taskTitle, dueDate = intent.dueDate))
@@ -54,8 +63,11 @@ class IntentExecutionRepository(
         if (!gitHub.isConfigured) return base
         // Use the canonical stored project name so the repo name matches the one created
         // with the project (the LLM's spoken name may differ by Persian script variants).
-        return gitHub.createIssueForTask(project.name, taskTitle, intent.dueDate).fold(
-            onSuccess = { issue -> "$base و ایشو #${issue.number} در گیت‌هاب ثبت شد" },
+        return gitHub.createIssueForTask(project.name, taskTitle, intent.dueDate, agentHandled).fold(
+            onSuccess = { issue ->
+                val suffix = if (agentHandled) " و به ایجنت سپرده شد" else ""
+                "$base و ایشو #${issue.number} در گیت‌هاب ثبت شد$suffix"
+            },
             onFailure = { "$base (ثبت ایشو گیت‌هاب ناموفق بود: ${it.message})" }
         )
     }

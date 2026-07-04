@@ -32,6 +32,9 @@ android {
 
         buildConfigField("String", "GAPGPT_API_KEY", "\"${secret("GAPGPT_API_KEY")}\"")
         buildConfigField("String", "GITHUB_TOKEN", "\"${secret("GITHUB_TOKEN")}\"")
+        // Optional build-time default for the Gemini key; the runtime value entered in
+        // Settings (stored encrypted) takes precedence over this. See SecretStore.
+        buildConfigField("String", "GEMINI_API_KEY", "\"${secret("GEMINI_API_KEY")}\"")
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
     }
@@ -78,6 +81,11 @@ dependencies {
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.kotlinx.serialization.converter)
     implementation(libs.okhttp.logging.interceptor)
+    implementation(libs.androidx.security.crypto)
+    // @aar: pull the Android-native artifacts (bundled libsodium + JNA dispatch libs).
+    // Versions come from the catalog; the @aar classifier can't be expressed as an alias.
+    implementation("com.goterl:lazysodium-android:${libs.versions.lazysodium.get()}@aar")
+    implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
