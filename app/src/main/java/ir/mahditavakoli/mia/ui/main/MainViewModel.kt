@@ -124,7 +124,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Pass the currently-loaded projects so Gemini can resolve spoken names
             // against real data instead of guessing from the audio alone.
             intentClassifier.classify(audio, _uiState.value.projects).fold(
-                onSuccess = { intent -> executeIntent(intent) },
+                onSuccess = { intents -> executeIntents(intents) },
                 onFailure = { error ->
                     _uiState.update { it.copy(recordingState = RecordingState.Idle) }
                     emitEvent("متوجه دستور نشدم: ${error.message}")
@@ -146,8 +146,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun executeIntent(intent: VoiceCommandIntent) {
-        val result = intentExecutionRepository.execute(intent, _uiState.value.agentHandledByDefault)
+    private suspend fun executeIntents(intents: List<VoiceCommandIntent>) {
+        val result = intentExecutionRepository.executeAll(intents, _uiState.value.agentHandledByDefault)
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
         result.fold(
             onSuccess = { message ->

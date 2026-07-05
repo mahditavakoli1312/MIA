@@ -20,8 +20,9 @@ data class VoiceCommandIntent(
     @SerialName("action_type") val actionType: ActionType,
     @SerialName("project_name") val projectName: String,
     @SerialName("task_title") val taskTitle: String? = null,
-    // A fuller, self-contained description of the task, used as the GitHub issue body so the
-    // Gemini coding agent has enough context. Null for non-task actions. See GeminiIntentPrompt.
+    // A comprehensive, self-contained Markdown brief (detailed description + technical
+    // specifications + UI/UX guidelines), used as the GitHub issue body so the Gemini coding
+    // agent can implement without follow-up. Null for non-task actions. See GeminiIntentPrompt.
     @SerialName("task_description") val taskDescription: String? = null,
     @SerialName("due_date") val dueDate: String? = null
 )

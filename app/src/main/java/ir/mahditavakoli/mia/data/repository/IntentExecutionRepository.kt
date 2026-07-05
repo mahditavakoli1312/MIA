@@ -22,6 +22,28 @@ class IntentExecutionRepository(
 ) {
 
     /**
+     * Executes a batch of intents (as the model may split one complex command into several) in
+     * order, so any prerequisite like create_project runs before the add_task objects that depend
+     * on it. Each intent's outcome is independent: one failing (e.g. a project not found) does not
+     * abort the rest, and the returned message summarizes every line. A single-intent batch behaves
+     * exactly like [execute] — same message, same failure propagation.
+     */
+    suspend fun executeAll(intents: List<VoiceCommandIntent>, agentHandled: Boolean): Result<String> = runCatching {
+        require(intents.isNotEmpty()) { "دستوری برای اجرا یافت نشد" }
+        if (intents.size == 1) return@runCatching execute(intents.first(), agentHandled).getOrThrow()
+        // Explicit loop, not joinToString { }, because execute() is a suspend function and
+        // joinToString's transform lambda isn't an inline/suspend-preserving context.
+        val lines = ArrayList<String>(intents.size)
+        for (intent in intents) {
+            lines += execute(intent, agentHandled).fold(
+                onSuccess = { "• $it" },
+                onFailure = { "• ⚠️ ${it.message}" }
+            )
+        }
+        lines.joinToString("\n")
+    }
+
+    /**
      * @param agentHandled whether a created task should be opened as an agent issue
      *        (labeled `by-agent` so the Gemini CI workflow runs). Ignored by non-task actions.
      */
