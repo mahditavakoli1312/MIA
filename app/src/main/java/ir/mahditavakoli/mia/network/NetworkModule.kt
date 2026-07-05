@@ -5,6 +5,7 @@ import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
 import ir.mahditavakoli.mia.data.session.SessionManager
+import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.security.AndroidBase64Encoder
 import ir.mahditavakoli.mia.security.LibsodiumSecretEncryptor
@@ -62,6 +63,15 @@ object NetworkModule {
     }
 
     private val converterFactory = json.asConverterFactory("application/json".toMediaType())
+
+    // Gemini rejects request parts that carry an explicit null field (e.g. a text part with
+    // "inline_data": null), so this instance drops nulls instead of emitting them.
+    private val geminiJson: Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
+    private val geminiConverterFactory = geminiJson.asConverterFactory("application/json".toMediaType())
 
     // Shows every request/response (headers, body, timing) in a notification + in-app UI.
     // library-no-op is swapped in for release builds, so this is a complete no-op in production.
@@ -124,6 +134,21 @@ object NetworkModule {
                     .build()
             )
             .addConverterFactory(converterFactory)
+            .build()
+            .create()
+    }
+
+    /** Multimodal voice→intent: takes recorded audio and returns the intent JSON directly. */
+    val geminiApi: GeminiApi by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://generativelanguage.googleapis.com/")
+            .client(
+                OkHttpClient.Builder()
+                    .addInterceptor(loggingInterceptor)
+                    .addInterceptor(chuckerInterceptor)
+                    .build()
+            )
+            .addConverterFactory(geminiConverterFactory)
             .build()
             .create()
     }

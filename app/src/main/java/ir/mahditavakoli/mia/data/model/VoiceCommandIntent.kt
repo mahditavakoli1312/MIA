@@ -13,12 +13,15 @@ enum class ActionType {
 
 /**
  * Mirrors the strict JSON schema the LLM is instructed to return.
- * See [ir.mahditavakoli.mia.network.openrouter.IntentClassifierPrompt].
+ * See [ir.mahditavakoli.mia.network.gemini.GeminiIntentPrompt].
  */
 @Serializable
 data class VoiceCommandIntent(
     @SerialName("action_type") val actionType: ActionType,
     @SerialName("project_name") val projectName: String,
     @SerialName("task_title") val taskTitle: String? = null,
+    // A fuller, self-contained description of the task, used as the GitHub issue body so the
+    // Gemini coding agent has enough context. Null for non-task actions. See GeminiIntentPrompt.
+    @SerialName("task_description") val taskDescription: String? = null,
     @SerialName("due_date") val dueDate: String? = null
 )

@@ -43,12 +43,18 @@ class GitHubRepository(
     suspend fun createIssueForTask(
         projectName: String,
         taskTitle: String,
+        description: String?,
         dueDate: String?,
         agentHandled: Boolean
     ): Result<GitHubIssue> = runCatching {
         val owner = owner()
         val body = buildString {
-            append("Task added via MIA for project «").append(projectName).append("».")
+            // Prefer the Gemini-generated description as the issue body (it's the agent's brief);
+            // fall back to a generic line when the intent carried none (e.g. non-voice callers).
+            append(
+                description?.takeIf { it.isNotBlank() }
+                    ?: "Task added via MIA for project «$projectName»."
+            )
             if (!dueDate.isNullOrBlank()) append("\n\nDue date: ").append(dueDate)
         }
         api.createIssue(

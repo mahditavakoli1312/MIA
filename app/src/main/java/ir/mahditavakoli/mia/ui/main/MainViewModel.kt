@@ -5,11 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
+import ir.mahditavakoli.mia.data.repository.GeminiVoiceIntentClassifier
 import ir.mahditavakoli.mia.data.repository.IntentExecutionRepository
 import ir.mahditavakoli.mia.data.repository.ProjectRepository
-import ir.mahditavakoli.mia.data.repository.VoiceIntentClassifier
 import ir.mahditavakoli.mia.network.NetworkModule
-import ir.mahditavakoli.mia.voice.SpeechRecognizerManager
+import ir.mahditavakoli.mia.voice.VoiceRecorder
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,16 +19,20 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * Orchestrates the full voice pipeline: mic -> on-device STT -> OpenRouter intent
- * classification -> Supabase execution -> refreshed project list.
+ * Orchestrates the full voice pipeline: mic -> record audio -> Gemini (multimodal
+ * transcription + intent extraction) -> Supabase execution -> refreshed project list.
  * Plain [AndroidViewModel] — the default Compose `viewModel()` factory wires the
  * Application instance automatically, no custom ViewModelProvider.Factory needed.
  */
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val speechRecognizerManager = SpeechRecognizerManager(application)
-    private val intentClassifier = VoiceIntentClassifier(NetworkModule.openRouterApi, NetworkModule.json)
     private val secretStore = NetworkModule.secretStore
+    private val voiceRecorder = VoiceRecorder(application)
+    private val intentClassifier = GeminiVoiceIntentClassifier(
+        api = NetworkModule.geminiApi,
+        json = NetworkModule.json,
+        apiKeyProvider = { secretStore.geminiApiKey }
+    )
     private val gitHubRepository = GitHubRepository(
         api = NetworkModule.gitHubApi,
         isConfigured = NetworkModule.isGitHubConfigured,
@@ -46,7 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
 
-    val micAmplitude: StateFlow<Float> = speechRecognizerManager.amplitude
+    val micAmplitude: StateFlow<Float> = voiceRecorder.amplitude
 
     // One-shot user-facing messages (snackbar) — a Channel avoids re-showing the same
     // message on rotation/recomposition the way a plain StateFlow field would.
@@ -56,9 +60,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshProjects()
         verifyGitHubToken()
-        viewModelScope.launch {
-            speechRecognizerManager.state.collect { state -> onSpeechState(state) }
-        }
     }
 
     // Settings ----------------------------------------------------------------
@@ -94,10 +95,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onMicClick() {
-        if (_uiState.value.recordingState is RecordingState.Listening) {
-            speechRecognizerManager.stopListening()
+        when (_uiState.value.recordingState) {
+            // Second tap: stop recording and hand the audio to Gemini.
+            is RecordingState.Listening -> stopAndProcess()
+            // Ignore taps while a previous command is still being classified/executed.
+            is RecordingState.Processing -> Unit
+            is RecordingState.Idle -> startListening()
+        }
+    }
+
+    private fun startListening() {
+        if (voiceRecorder.start()) {
+            _uiState.update { it.copy(recordingState = RecordingState.Listening) }
         } else {
-            speechRecognizerManager.startListening()
+            emitEvent("دسترسی به میکروفون ممکن نشد")
+        }
+    }
+
+    private fun stopAndProcess() {
+        val audio = voiceRecorder.stop()
+        if (audio == null) {
+            _uiState.update { it.copy(recordingState = RecordingState.Idle) }
+            emitEvent("صدایی ضبط نشد، دوباره تلاش کنید")
+            return
+        }
+        _uiState.update { it.copy(recordingState = RecordingState.Processing) }
+        viewModelScope.launch {
+            // Pass the currently-loaded projects so Gemini can resolve spoken names
+            // against real data instead of guessing from the audio alone.
+            intentClassifier.classify(audio, _uiState.value.projects).fold(
+                onSuccess = { intent -> executeIntent(intent) },
+                onFailure = { error ->
+                    _uiState.update { it.copy(recordingState = RecordingState.Idle) }
+                    emitEvent("متوجه دستور نشدم: ${error.message}")
+                }
+            )
         }
     }
 
@@ -109,35 +141,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onFailure = { error ->
                     _uiState.update { it.copy(isLoadingProjects = false) }
                     emitEvent(error.message ?: "خطا در بارگذاری پروژه‌ها")
-                }
-            )
-        }
-    }
-
-    private fun onSpeechState(state: SpeechRecognizerManager.State) {
-        when (state) {
-            is SpeechRecognizerManager.State.Idle ->
-                _uiState.update { it.copy(recordingState = RecordingState.Idle) }
-            is SpeechRecognizerManager.State.Listening ->
-                _uiState.update { it.copy(recordingState = RecordingState.Listening) }
-            is SpeechRecognizerManager.State.Result -> processCandidates(state.candidates)
-            is SpeechRecognizerManager.State.Error -> {
-                _uiState.update { it.copy(recordingState = RecordingState.Idle) }
-                emitEvent(state.message)
-            }
-        }
-    }
-
-    private fun processCandidates(candidates: List<String>) {
-        _uiState.update { it.copy(recordingState = RecordingState.Processing) }
-        viewModelScope.launch {
-            // Pass the currently-loaded projects so the model can resolve spoken names
-            // against real data instead of guessing from the raw transcription alone.
-            intentClassifier.classify(candidates, _uiState.value.projects).fold(
-                onSuccess = { intent -> executeIntent(intent) },
-                onFailure = { error ->
-                    _uiState.update { it.copy(recordingState = RecordingState.Idle) }
-                    emitEvent("متوجه دستور نشدم: ${error.message}")
                 }
             )
         }
@@ -161,6 +164,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
-        speechRecognizerManager.destroy()
+        voiceRecorder.cancel()
     }
 }

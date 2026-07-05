@@ -64,13 +64,41 @@ jobs:
             echo "${ISSUE_BODY}"
           } > "${RUNNER_TEMP}/agent-prompt.txt"
 
+      # Pin the model AND disable Gemini CLI's "intelligent model routing".
+      # The router (settings key experimental.useModelRouter, ON by default since
+      # v0.11.2) silently overrides the --model / -m flag and re-routes requests to
+      # gemini-3.5-flash — a preview model capped at ~20 generateContent requests/day
+      # on the free tier. That's why the 429 kept naming gemini-3.5-flash even after
+      # we passed -m gemini-2.5-flash. Writing settings.json with the router off makes
+      # the pinned model actually stick, so runs use gemini-2.5-flash's much larger
+      # free-tier allowance instead.
+      - name: Configure Gemini CLI (pin model, disable auto-routing)
+        env:
+          # Override the default by setting a GEMINI_MODEL repo/environment variable;
+          # for an even higher free cap (at some quality cost) use gemini-2.5-flash-lite.
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+        run: |
+          mkdir -p "$HOME/.gemini"
+          cat > "$HOME/.gemini/settings.json" <<EOF
+          {
+            "model": {
+              "name": "${GEMINI_MODEL}"
+            },
+            "experimental": {
+              "useModelRouter": false
+            }
+          }
+          EOF
+          echo "Pinned Gemini model to: ${GEMINI_MODEL} (auto-routing disabled)"
+
       - name: Run Gemini CLI
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # CI runners are non-interactive, so the CLI can't prompt to "trust" the
           # checked-out folder; without this it downgrades --yolo and aborts (exit 55).
           GEMINI_CLI_TRUST_WORKSPACE: "true"
-        run: gemini --yolo --skip-trust -p "$(cat "${RUNNER_TEMP}/agent-prompt.txt")"
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+        run: gemini --yolo --skip-trust -m "$GEMINI_MODEL" -p "$(cat "${RUNNER_TEMP}/agent-prompt.txt")"
 
       - name: Verify build (Gradle)
         id: build

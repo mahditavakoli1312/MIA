@@ -63,7 +63,7 @@ class IntentExecutionRepository(
         if (!gitHub.isConfigured) return base
         // Use the canonical stored project name so the repo name matches the one created
         // with the project (the LLM's spoken name may differ by Persian script variants).
-        return gitHub.createIssueForTask(project.name, taskTitle, intent.dueDate, agentHandled).fold(
+        return gitHub.createIssueForTask(project.name, taskTitle, intent.taskDescription, intent.dueDate, agentHandled).fold(
             onSuccess = { issue ->
                 val suffix = if (agentHandled) " و به ایجنت سپرده شد" else ""
                 "$base و ایشو #${issue.number} در گیت‌هاب ثبت شد$suffix"
