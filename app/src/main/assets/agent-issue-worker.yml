@@ -64,18 +64,21 @@ jobs:
             echo "${ISSUE_BODY}"
           } > "${RUNNER_TEMP}/agent-prompt.txt"
 
-      # Pin the model AND disable Gemini CLI's "intelligent model routing".
-      # The router (settings key experimental.useModelRouter, ON by default since
-      # v0.11.2) silently overrides the --model / -m flag and re-routes requests to
-      # gemini-3.5-flash — a preview model capped at ~20 generateContent requests/day
-      # on the free tier. That's why the 429 kept naming gemini-3.5-flash even after
-      # we passed -m gemini-2.5-flash. Writing settings.json with the router off makes
-      # the pinned model actually stick, so runs use gemini-2.5-flash's much larger
-      # free-tier allowance instead.
-      - name: Configure Gemini CLI (pin model, disable auto-routing)
+      # Pin the model for every call that honours it. IMPORTANT: this does NOT stop
+      # Gemini CLI's "intelligent model routing" from firing its own classifier requests
+      # against a preview model (gemini-3.5-flash, ~20 generateContent/day on the free
+      # tier) — that is the "limit: 20, model: gemini-3.5-flash" 429 you may see. The old
+      # `experimental.useModelRouter: false` switch was REMOVED from the CLI in Nov 2025
+      # (google-gemini/gemini-cli#13593), so there is no supported way to fully disable
+      # routing on current releases; -m / GEMINI_MODEL / model.name only pin the *main*
+      # model. For a multi-turn coding agent the durable fix is to enable billing on the
+      # GEMINI_API_KEY project (removes the free-tier daily caps). The "Run Gemini CLI"
+      # step below degrades cleanly when the daily quota is hit instead of failing the
+      # job with a cryptic crash.
+      - name: Configure Gemini CLI (pin model)
         env:
-          # Override the default by setting a GEMINI_MODEL repo/environment variable;
-          # for an even higher free cap (at some quality cost) use gemini-2.5-flash-lite.
+          # Override with a GEMINI_MODEL repo/environment variable; gemini-2.5-flash-lite
+          # has a higher free-tier request cap at some quality cost.
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
         run: |
           mkdir -p "$HOME/.gemini"
@@ -83,25 +86,50 @@ jobs:
           {
             "model": {
               "name": "${GEMINI_MODEL}"
-            },
-            "experimental": {
-              "useModelRouter": false
             }
           }
           EOF
-          echo "Pinned Gemini model to: ${GEMINI_MODEL} (auto-routing disabled)"
+          echo "Pinned Gemini model to: ${GEMINI_MODEL}"
 
       - name: Run Gemini CLI
+        id: agent
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # CI runners are non-interactive, so the CLI can't prompt to "trust" the
           # checked-out folder; without this it downgrades --yolo and aborts (exit 55).
           GEMINI_CLI_TRUST_WORKSPACE: "true"
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
-        run: gemini --yolo --skip-trust -m "$GEMINI_MODEL" -p "$(cat "${RUNNER_TEMP}/agent-prompt.txt")"
+        run: |
+          set -o pipefail
+          # Run without letting `bash -e` abort on a non-zero exit, so the reporting steps
+          # can tell an ordinary failure apart from free-tier quota exhaustion (HTTP 429).
+          log="${RUNNER_TEMP}/gemini-output.log"
+          if gemini --yolo --skip-trust -m "$GEMINI_MODEL" \
+               -p "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'quota|exhausted|resource_exhausted|429' "$log"; then
+            echo "status=quota" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=error" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Free-tier quota exhaustion is expected, not a bug: comment and let the job pass
+      # green so the run history isn't a wall of red. The user re-triggers by re-labeling.
+      - name: Report Gemini quota exhaustion
+        if: steps.agent.outputs.status == 'quota'
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ The agent could not finish: the Gemini API free-tier daily quota is exhausted (HTTP 429).\n\nFree-tier keys are capped at a few requests per day, and the CLI model router also spends part of that budget on gemini-3.5-flash (limit 20/day), so an autonomous multi-step run can exhaust it quickly.\n\nTo fix: enable billing on the Google Cloud / AI Studio project behind GEMINI_API_KEY, or wait for the daily quota to reset — then remove and re-add the by-agent label to try again.'
+
+      - name: Report unexpected agent failure
+        if: steps.agent.outputs.status == 'error'
+        run: |
+          gh issue comment "$ISSUE_NUMBER" \
+            --body "🛑 The Gemini agent exited with an error before making changes. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+          exit 1
 
       - name: Verify build (Gradle)
         id: build
+        if: steps.agent.outputs.status == 'ok'
         run: |
           if [ -x ./gradlew ] || [ -f ./gradlew ]; then
             chmod +x ./gradlew
@@ -123,6 +151,7 @@ jobs:
         run: exit 1
 
       - name: Commit, push and relabel
+        if: steps.agent.outputs.status == 'ok'
         run: |
           git config user.name "gemini-agent[bot]"
           git config user.email "gemini-agent[bot]@users.noreply.github.com"
