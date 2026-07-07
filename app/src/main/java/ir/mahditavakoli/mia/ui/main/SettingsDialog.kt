@@ -18,16 +18,20 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 /**
- * Minimal settings surface: the Gemini API key (stored encrypted, pushed to each repo's
- * Actions secrets) and whether new voice-created tasks are agent-handled by default.
+ * Minimal settings surface (all stored encrypted): the Gemini API key used for on-device
+ * voice→intent, the OpenRouter API key MIA pushes to each repo's Actions secrets so the CI
+ * agent can run, and whether new voice-created tasks are agent-handled by default.
  */
 @Composable
 fun SettingsDialog(
     agentHandledByDefault: Boolean,
     geminiApiKey: String,
+    openRouterApiKey: String,
     onAgentHandledChange: (Boolean) -> Unit,
     onGeminiApiKeyChange: (String) -> Unit,
     onSaveGeminiApiKey: () -> Unit,
+    onOpenRouterApiKeyChange: (String) -> Unit,
+    onSaveOpenRouterApiKey: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
@@ -51,11 +55,26 @@ fun SettingsDialog(
                     onValueChange = onGeminiApiKeyChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("کلید API جمینای") },
+                    label = { Text("کلید API جمینای (تشخیص گفتار)") },
                     visualTransformation = PasswordVisualTransformation()
                 )
                 TextButton(
                     onClick = onSaveGeminiApiKey,
+                    modifier = Modifier.align(Alignment.End)
+                ) { Text("ذخیره کلید") }
+
+                Spacer(Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = openRouterApiKey,
+                    onValueChange = onOpenRouterApiKeyChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("کلید API اوپن‌روتر (ایجنت)") },
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                TextButton(
+                    onClick = onSaveOpenRouterApiKey,
                     modifier = Modifier.align(Alignment.End)
                 ) { Text("ذخیره کلید") }
             }

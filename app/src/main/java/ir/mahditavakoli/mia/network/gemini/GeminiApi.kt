@@ -9,7 +9,8 @@ interface GeminiApi {
     /**
      * The API key is passed per-call (via the `x-goog-api-key` header) rather than baked into
      * an interceptor, because it's the runtime key from [ir.mahditavakoli.mia.security.SecretStore]
-     * — the same key MIA stores as each repo's `GEMINI_API_KEY` Actions secret.
+     * — the Gemini key used for on-device voice→intent (distinct from the OpenRouter key MIA
+     * stores as each repo's `OPENROUTER_API_KEY` Actions secret for the CI agent).
      */
     @POST("v1beta/models/{model}:generateContent")
     suspend fun generateContent(

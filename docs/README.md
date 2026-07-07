@@ -331,7 +331,7 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
    مرحله‌ای است که خطایش کل عملیات را شکست می‌دهد.
 2. **بارگذاری فایل ورک‌فلو** `.github/workflows/agent-issue-worker.yml` (اگر از قالب استفاده نشده باشد).
 3. **ساخت برچسب‌ها:** `by-agent` (آبی) و `done` (سبز). کد ۴۲۲ (برچسب از قبل وجود دارد) قابل‌قبول است.
-4. **ذخیرهٔ کلید Gemini** به‌عنوان Secret اکشنز با نام `GEMINI_API_KEY`.
+4. **ذخیرهٔ کلید OpenRouter** به‌عنوان Secret اکشنز با نام `OPENROUTER_API_KEY` (کلیدی که ایجنت CI برای اجرای مدل رایگان استفاده می‌کند).
 
 مراحل ۲ تا ۴ «بهترین‌تلاش» هستند؛ اگر هرکدام خطا بدهند، به‌جای شکست کامل، در فهرست `warnings` گزارش
 می‌شوند و کاربر پیام هشدار می‌بیند (مثلاً «هشدار پیکربندی ایجنت: ...»).
@@ -345,8 +345,8 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 **فایل:** `app/src/main/assets/agent-issue-worker.yml`
 
 این جالب‌ترین قسمت سیستم است: وقتی یک Issue با برچسب `by-agent` باز/برچسب‌گذاری می‌شود، یک ورک‌فلوی
-GitHub Actions فعال می‌شود که **یک ایجنت کدنویس خودکار (Gemini CLI)** را اجرا می‌کند تا وظیفه را
-واقعاً در کد انجام دهد. مراحل ورک‌فلو:
+GitHub Actions فعال می‌شود که **یک ایجنت کدنویس خودکار (OpenCode CLI روی یک مدل رایگان OpenRouter)** را
+اجرا می‌کند تا وظیفه را واقعاً در کد انجام دهد. مراحل ورک‌فلو:
 
 <div dir="ltr">
 
@@ -355,14 +355,13 @@ issue labeled "by-agent"
         │
         ▼
 1. Checkout شاخهٔ پیش‌فرض
-2. نصب JDK 17 و Node 20 و Gemini CLI
+2. نصب JDK 17 و Node 20 و OpenCode CLI
 3. ساخت پرامپت از عنوان و بدنهٔ Issue (به‌صورت امن، در متغیر محیطی)
-4. پین کردن مدل Gemini و خاموش کردن مسیریابی خودکار مدل
-5. اجرای Gemini CLI با --yolo (ویرایش مستقیم فایل‌ها)
-6. گِیت ساخت: ./gradlew assembleDebug
+4. اجرای OpenCode با --auto و مدل openrouter/... (ویرایش مستقیم فایل‌ها)
+5. گِیت ساخت: ./gradlew assembleDebug
         ├── اگر ساخت شکست خورد → کامنت خطا + شکست جاب (چیزی push نمی‌شود)
         └── اگر موفق بود ↓
-7. commit، push به شاخهٔ پیش‌فرض، تعویض برچسب by-agent → done،
+6. commit، push به شاخهٔ پیش‌فرض، تعویض برچسب by-agent → done،
    و کامنت تأیید با SHA کامیت
 ```
 
@@ -377,10 +376,12 @@ issue labeled "by-agent"
 - **گِیت ساخت:** تغییرات ایجنت فقط زمانی push می‌شوند که `./gradlew assembleDebug` موفق باشد؛ در غیر
   این صورت هیچ چیز push نمی‌شود و کاربر کامنت خطا می‌بیند.
 - **ایجنت git نمی‌زند:** ایجنت فقط فایل‌ها را ویرایش می‌کند؛ commit و push را خود ورک‌فلو انجام می‌دهد.
-- **پین کردن مدل:** «مسیریاب هوشمند مدل» Gemini CLI (که به‌طور پیش‌فرض روشن است) می‌تواند فلگ `--model`
-  را نادیده بگیرد و به یک مدل با سهمیهٔ روزانهٔ بسیار کم مسیریابی کند. برای همین `settings.json` با
-  `useModelRouter: false` نوشته می‌شود تا مدل پین‌شده واقعاً اعمال شود.
-- ایجنت به `GEMINI_API_KEY` (همان Secret که MIA در مخزن ذخیره کرده) نیاز دارد تا کار کند.
+- **انتخاب مدل:** مدل با متغیر `AGENT_MODEL` قابل تغییر است؛ پیش‌فرض `openrouter/openai/gpt-oss-120b:free`
+  است. OpenCode رشتهٔ مدل را روی نخستین `/` جدا می‌کند، پس این یعنی provider=openrouter و
+  model=openai/gpt-oss-120b:free. مدل‌های رایگان OpenRouter سقف روزانه دارند (حدود ۲۰۰ درخواست در روز)، و
+  ورک‌فلو هنگام برخورد به خطای 429 به‌جای شکست قرمز، فقط یک کامنت می‌گذارد و سبز عبور می‌کند.
+- ایجنت به Secret به نام `OPENROUTER_API_KEY` (همان کلیدی که MIA در مخزن ذخیره کرده) نیاز دارد؛ کلید رایگان
+  OpenRouter کافی است. اگر این Secret تنظیم نشده باشد، ورک‌فلو یک کامنت راهنما می‌گذارد.
 
 ---
 
@@ -421,21 +422,22 @@ issue labeled "by-agent"
 
 **فایل‌ها:** `security/SecretStore.kt`، `security/AndroidCrypto.kt`
 
-- **`SecretStore`**: کلید Gemini که کاربر در زمان اجرا وارد می‌کند را در **`EncryptedSharedPreferences`**
-  (رمزنگاری AES-256-GCM با کلید نگه‌داری‌شده در Android Keystore) ذخیره می‌کند. مقدار زمان‌اجرا بر
-  پیش‌فرض زمان‌ساخت (`BuildConfig.GEMINI_API_KEY`) اولویت دارد. همچنین گزینهٔ «سپردن به ایجنت به‌صورت
-  پیش‌فرض» را نگه می‌دارد.
-- **`LibsodiumSecretEncryptor`**: برای ذخیرهٔ کلید Gemini به‌عنوان Secret گیت‌هاب، باید مقدار را طبق
+- **`SecretStore`**: دو کلیدی که کاربر در زمان اجرا وارد می‌کند را در **`EncryptedSharedPreferences`**
+  (رمزنگاری AES-256-GCM با کلید نگه‌داری‌شده در Android Keystore) ذخیره می‌کند: کلید Gemini (برای
+  تشخیص گفتار روی دستگاه) و کلید OpenRouter (برای ایجنت CI). مقدار زمان‌اجرا بر پیش‌فرض زمان‌ساخت
+  (`BuildConfig.GEMINI_API_KEY` / `BuildConfig.OPENROUTER_API_KEY`) اولویت دارد. همچنین گزینهٔ «سپردن به
+  ایجنت به‌صورت پیش‌فرض» را نگه می‌دارد.
+- **`LibsodiumSecretEncryptor`**: برای ذخیرهٔ کلید OpenRouter به‌عنوان Secret گیت‌هاب، باید مقدار را طبق
   استاندارد API اکشنز رمز کرد: یک **libsodium sealed box** (`crypto_box_seal`) در برابر کلید عمومی
   Curve25519 مخزن، به‌صورت Base64. این کار در دستگاه انجام می‌شود، پس کلید هرگز به‌صورت متن ساده به
   گیت‌هاب نمی‌رود.
 
 **تمایز مهم:**
 - نشست کاربر (توکن Supabase) در `SharedPreferences` **معمولی** ذخیره می‌شود.
-- کلید Gemini در `EncryptedSharedPreferences` **رمزنگاری‌شده** ذخیره می‌شود.
+- کلیدهای Gemini و OpenRouter در `EncryptedSharedPreferences` **رمزنگاری‌شده** ذخیره می‌شوند.
 
 **کلیدهای زمان‌ساخت** (از `local.properties` یا متغیرهای محیطی، به `BuildConfig` تزریق می‌شوند):
-`GAPGPT_API_KEY`، `GITHUB_TOKEN`، `GEMINI_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
+`GAPGPT_API_KEY`، `GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
 
 ---
 
@@ -498,7 +500,8 @@ data class VoiceCommandIntent(
 SUPABASE_URL=https://<your-project>.supabase.co
 SUPABASE_ANON_KEY=<anon-key>
 GITHUB_TOKEN=<token با دسترسی repo + workflow>
-GEMINI_API_KEY=<کلید Gemini؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
+GEMINI_API_KEY=<کلید Gemini برای تشخیص گفتار؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
+OPENROUTER_API_KEY=<کلید رایگان OpenRouter برای ایجنت CI؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
 GAPGPT_API_KEY=<میراثی؛ برای مسیر فعلی لازم نیست>
 ```
 

@@ -12,6 +12,7 @@ import ir.mahditavakoli.mia.network.gemini.GeminiRequest
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import retrofit2.HttpException
 
 /**
  * Sends recorded WAV audio (plus the user's projects/tasks as grounding context) straight to
@@ -52,13 +53,31 @@ class GeminiVoiceIntentClassifier(
             )
         )
 
-        val rawContent = api.generateContent(model, apiKey, request)
+        val response = try {
+            api.generateContent(model, apiKey, request)
+        } catch (e: HttpException) {
+            throw IllegalStateException(describeHttpError(e), e)
+        }
+        val rawContent = response
             .candidates.firstOrNull()
             ?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
             ?: error("پاسخ خالی از Gemini دریافت شد")
 
         parseIntents(sanitize(rawContent))
             .ifEmpty { error("هیچ دستوری از صدا استخراج نشد") }
+    }
+
+    // Google reports a bad classic key (AIza…) as 400 API_KEY_INVALID but a bad new-format
+    // key (AQ.…) as 401 UNAUTHENTICATED, so all three of 400/401/403 can mean "bad key".
+    private fun describeHttpError(e: HttpException): String {
+        val body = runCatching { e.response()?.errorBody()?.string() }.getOrNull().orEmpty()
+        return when {
+            e.code() == 401 || e.code() == 403 || (e.code() == 400 && "API_KEY" in body) ->
+                "کلید Gemini نامعتبر یا باطل شده است (HTTP ${e.code()})؛ کلید معتبر را در تنظیمات وارد کنید"
+            e.code() == 429 ->
+                "سهمیه Gemini پر شده است؛ کمی بعد دوباره تلاش کنید"
+            else -> "خطای Gemini (HTTP ${e.code()})"
+        }
     }
 
     // The prompt asks for a JSON array, but tolerate a bare object too so a slightly

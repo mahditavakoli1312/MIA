@@ -15,8 +15,8 @@ import kotlin.math.absoluteValue
  * mapping anywhere. [isConfigured] is false when no token is set, in which case callers
  * skip GitHub entirely.
  *
- * Creating a repo also wires it up to the Gemini CI agent via [RepoBootstrapper] (workflow
- * file, labels, `GEMINI_API_KEY` secret), and agent-handled tasks are opened already
+ * Creating a repo also wires it up to the OpenCode CI agent via [RepoBootstrapper] (workflow
+ * file, labels, `OPENROUTER_API_KEY` secret), and agent-handled tasks are opened already
  * labeled `by-agent` so the workflow fires immediately.
  */
 class GitHubRepository(
@@ -36,7 +36,7 @@ class GitHubRepository(
             name = repoNameFor(projectName),
             description = "Project «$projectName» — managed by MIA",
             private = createPrivate,
-            geminiApiKey = secretStore.geminiApiKey
+            agentApiKey = secretStore.agentApiKey
         )
     }
 

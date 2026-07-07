@@ -1,6 +1,9 @@
 # Managed by MIA — do not edit by hand.
-# When an issue is labeled "by-agent", let the Gemini CLI attempt the task by editing
+# When an issue is labeled "by-agent", let the OpenCode CLI attempt the task by editing
 # files, gate the result on the Gradle build, then push and relabel the issue "done".
+#
+# This replaces the old Gemini CLI runner: OpenCode drives a free OpenRouter model, so the
+# agent runs on a free-to-obtain OpenRouter API key instead of a rate-capped Gemini key.
 name: Agent Issue Worker
 
 on:
@@ -46,8 +49,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Gemini CLI
-        run: npm install -g @google/gemini-cli
+      - name: Install OpenCode CLI
+        run: npm install -g opencode-ai
 
       - name: Build the prompt
         run: |
@@ -64,67 +67,59 @@ jobs:
             echo "${ISSUE_BODY}"
           } > "${RUNNER_TEMP}/agent-prompt.txt"
 
-      # Pin the model for every call that honours it. IMPORTANT: this does NOT stop
-      # Gemini CLI's "intelligent model routing" from firing its own classifier requests
-      # against a preview model (gemini-3.5-flash, ~20 generateContent/day on the free
-      # tier) — that is the "limit: 20, model: gemini-3.5-flash" 429 you may see. The old
-      # `experimental.useModelRouter: false` switch was REMOVED from the CLI in Nov 2025
-      # (google-gemini/gemini-cli#13593), so there is no supported way to fully disable
-      # routing on current releases; -m / GEMINI_MODEL / model.name only pin the *main*
-      # model. For a multi-turn coding agent the durable fix is to enable billing on the
-      # GEMINI_API_KEY project (removes the free-tier daily caps). The "Run Gemini CLI"
-      # step below degrades cleanly when the daily quota is hit instead of failing the
-      # job with a cryptic crash.
-      - name: Configure Gemini CLI (pin model)
-        env:
-          # Override with a GEMINI_MODEL repo/environment variable; gemini-2.5-flash-lite
-          # has a higher free-tier request cap at some quality cost.
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
-        run: |
-          mkdir -p "$HOME/.gemini"
-          cat > "$HOME/.gemini/settings.json" <<EOF
-          {
-            "model": {
-              "name": "${GEMINI_MODEL}"
-            }
-          }
-          EOF
-          echo "Pinned Gemini model to: ${GEMINI_MODEL}"
-
-      - name: Run Gemini CLI
+      # OpenCode picks up the OpenRouter key from OPENROUTER_API_KEY automatically, so no
+      # interactive `opencode auth login` is needed. Models are addressed as "provider/model"
+      # and OpenCode splits on the FIRST "/", so `openrouter/openai/gpt-oss-120b:free` means
+      # provider=openrouter, model=openai/gpt-oss-120b:free.
+      #
+      # Free OpenRouter models rotate and are capped (~200 requests/day, ~20/min), which an
+      # autonomous multi-step run can exhaust. Override the default with an AGENT_MODEL
+      # repo/environment variable pointing at any model your key can reach — another `:free`
+      # coding model, or a paid one once you add credit. The step below degrades cleanly on
+      # a 429 instead of failing the job with a red run.
+      - name: Run OpenCode CLI
         id: agent
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          # CI runners are non-interactive, so the CLI can't prompt to "trust" the
-          # checked-out folder; without this it downgrades --yolo and aborts (exit 55).
-          GEMINI_CLI_TRUST_WORKSPACE: "true"
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/openai/gpt-oss-120b:free' }}
         run: |
           set -o pipefail
-          # Run without letting `bash -e` abort on a non-zero exit, so the reporting steps
-          # can tell an ordinary failure apart from free-tier quota exhaustion (HTTP 429).
-          log="${RUNNER_TEMP}/gemini-output.log"
-          if gemini --yolo --skip-trust -m "$GEMINI_MODEL" \
-               -p "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
+          # Without a key OpenCode can't reach any model; report it as its own state so the
+          # user gets an actionable comment instead of a cryptic provider error.
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "status=nokey" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          log="${RUNNER_TEMP}/opencode-output.log"
+          # `run` is the non-interactive mode; --auto auto-approves the file edits the agent
+          # proposes so there's no TUI/permission prompt to hang the runner.
+          if opencode run --auto -m "$AGENT_MODEL" \
+               "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
             echo "status=ok" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'quota|exhausted|resource_exhausted|429' "$log"; then
+          elif grep -qiE '429|rate.?limit|quota|exhausted|too many requests|insufficient' "$log"; then
             echo "status=quota" >> "$GITHUB_OUTPUT"
           else
             echo "status=error" >> "$GITHUB_OUTPUT"
           fi
 
-      # Free-tier quota exhaustion is expected, not a bug: comment and let the job pass
+      - name: Report missing OpenRouter key
+        if: steps.agent.outputs.status == 'nokey'
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body $'🔑 The agent could not run: no `OPENROUTER_API_KEY` Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or add it in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then remove and re-add the by-agent label to try again.'
+          exit 1
+
+      # Free-tier rate/quota exhaustion is expected, not a bug: comment and let the job pass
       # green so the run history isn't a wall of red. The user re-triggers by re-labeling.
-      - name: Report Gemini quota exhaustion
+      - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ The agent could not finish: the Gemini API free-tier daily quota is exhausted (HTTP 429).\n\nFree-tier keys are capped at a few requests per day, and the CLI model router also spends part of that budget on gemini-3.5-flash (limit 20/day), so an autonomous multi-step run can exhaust it quickly.\n\nTo fix: enable billing on the Google Cloud / AI Studio project behind GEMINI_API_KEY, or wait for the daily quota to reset — then remove and re-add the by-agent label to try again.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ The agent could not finish: the OpenRouter free-tier quota/rate limit was hit (HTTP 429).\n\nFree models are capped (roughly 200 requests/day and 20/min), which an autonomous multi-step run can burn through quickly.\n\nTo fix: wait for the quota to reset, point the AGENT_MODEL variable at another free model, or add credit to your OpenRouter account — then remove and re-add the by-agent label to try again.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'
         run: |
           gh issue comment "$ISSUE_NUMBER" \
-            --body "🛑 The Gemini agent exited with an error before making changes. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+            --body "🛑 The OpenCode agent exited with an error before making usable changes. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
           exit 1
 
       - name: Verify build (Gradle)
@@ -153,17 +148,20 @@ jobs:
       - name: Commit, push and relabel
         if: steps.agent.outputs.status == 'ok'
         run: |
-          git config user.name "gemini-agent[bot]"
-          git config user.email "gemini-agent[bot]@users.noreply.github.com"
+          # OpenCode keeps session state under $HOME, but drop any stray in-repo artifacts
+          # so they can't leak into the commit.
+          rm -rf .opencode
+          git config user.name "mia-agent[bot]"
+          git config user.email "mia-agent[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
             gh issue comment "$ISSUE_NUMBER" \
               --body "ℹ️ The agent ran but produced no file changes for this issue. Leaving it open for a human to review."
             exit 0
           fi
-          git commit -m "gemini-agent: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+          git commit -m "mia-agent: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
           COMMIT_SHA="$(git rev-parse HEAD)"
           gh issue edit "$ISSUE_NUMBER" --remove-label "by-agent" --add-label "done"
           gh issue comment "$ISSUE_NUMBER" \
-            --body "✅ Resolved by the Gemini agent in \`${COMMIT_SHA}\` and pushed to \`${{ github.event.repository.default_branch }}\`."
+            --body "✅ Resolved by the OpenCode agent in \`${COMMIT_SHA}\` and pushed to \`${{ github.event.repository.default_branch }}\`."

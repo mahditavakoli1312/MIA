@@ -170,9 +170,12 @@ fun MainScreen(
             SettingsDialog(
                 agentHandledByDefault = uiState.agentHandledByDefault,
                 geminiApiKey = uiState.geminiApiKey,
+                openRouterApiKey = uiState.openRouterApiKey,
                 onAgentHandledChange = viewModel::onAgentHandledChange,
                 onGeminiApiKeyChange = viewModel::onGeminiApiKeyChange,
                 onSaveGeminiApiKey = viewModel::saveGeminiApiKey,
+                onOpenRouterApiKeyChange = viewModel::onOpenRouterApiKeyChange,
+                onSaveOpenRouterApiKey = viewModel::saveOpenRouterApiKey,
                 onDismiss = { showSettings = false }
             )
         }

@@ -45,7 +45,7 @@ class IntentExecutionRepository(
 
     /**
      * @param agentHandled whether a created task should be opened as an agent issue
-     *        (labeled `by-agent` so the Gemini CI workflow runs). Ignored by non-task actions.
+     *        (labeled `by-agent` so the OpenCode CI workflow runs). Ignored by non-task actions.
      */
     suspend fun execute(intent: VoiceCommandIntent, agentHandled: Boolean): Result<String> = runCatching {
         when (intent.actionType) {

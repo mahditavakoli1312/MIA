@@ -45,7 +45,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(
         MainUiState(
             agentHandledByDefault = secretStore.agentHandledByDefault,
-            geminiApiKey = secretStore.geminiApiKeyOverride
+            geminiApiKey = secretStore.geminiApiKeyOverride,
+            openRouterApiKey = secretStore.agentApiKeyOverride
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -74,10 +75,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(geminiApiKey = value) }
     }
 
-    /** Persist the Gemini API key entered in Settings (used for the repo Actions secret). */
+    /** Persist the Gemini API key entered in Settings (used for on-device voice→intent). */
     fun saveGeminiApiKey() {
         secretStore.saveGeminiApiKey(_uiState.value.geminiApiKey)
         emitEvent("کلید Gemini ذخیره شد")
+    }
+
+    fun onOpenRouterApiKeyChange(value: String) {
+        _uiState.update { it.copy(openRouterApiKey = value) }
+    }
+
+    /** Persist the OpenRouter API key (pushed to each repo as the OPENROUTER_API_KEY secret). */
+    fun saveOpenRouterApiKey() {
+        secretStore.saveAgentApiKey(_uiState.value.openRouterApiKey)
+        emitEvent("کلید OpenRouter ذخیره شد")
     }
 
     // Warn when the GitHub token can't push workflow files (missing `workflow` scope).

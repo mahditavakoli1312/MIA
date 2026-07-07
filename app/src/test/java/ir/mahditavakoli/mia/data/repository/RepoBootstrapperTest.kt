@@ -29,7 +29,7 @@ class RepoBootstrapperTest {
             name = "test-repo",
             description = "desc",
             private = true,
-            geminiApiKey = "gemini-secret"
+            agentApiKey = "agent-secret"
         )
 
         assertTrue("no warnings expected: ${result.warnings}", result.warnings.isEmpty())
@@ -49,7 +49,7 @@ class RepoBootstrapperTest {
 
         // Secret sealed with the repo public key and stored under the right name.
         assertEquals(RepoBootstrapper.SECRET_NAME, api.putSecretName)
-        assertEquals("sealed(gemini-secret|${api.publicKey.key})", api.putSecretBody?.encryptedValue)
+        assertEquals("sealed(agent-secret|${api.publicKey.key})", api.putSecretBody?.encryptedValue)
         assertEquals(api.publicKey.keyId, api.putSecretBody?.keyId)
     }
 
@@ -62,7 +62,7 @@ class RepoBootstrapperTest {
             name = "test-repo",
             description = null,
             private = true,
-            geminiApiKey = "gemini-secret"
+            agentApiKey = "agent-secret"
         )
 
         assertTrue(result.warnings.isEmpty())
@@ -88,13 +88,13 @@ class RepoBootstrapperTest {
     }
 
     @Test
-    fun `missing gemini key skips secret and warns`() = runBlocking {
+    fun `missing agent key skips secret and warns`() = runBlocking {
         val api = FakeGitHubApi()
 
-        val result = bootstrapper(api).bootstrap("octocat", "r", null, true, geminiApiKey = null)
+        val result = bootstrapper(api).bootstrap("octocat", "r", null, true, agentApiKey = null)
 
         assertNull("secret must not be set without a key", api.putSecretBody)
-        assertTrue(result.warnings.any { it.contains("GEMINI_API_KEY") })
+        assertTrue(result.warnings.any { it.contains("OPENROUTER_API_KEY") })
     }
 
     @Test

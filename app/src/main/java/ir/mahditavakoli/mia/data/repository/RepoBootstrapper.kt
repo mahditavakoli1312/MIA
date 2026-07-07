@@ -23,12 +23,12 @@ fun interface SecretEncryptor {
 }
 
 /**
- * Wires a freshly created repository up to the Gemini CI agent:
+ * Wires a freshly created repository up to the OpenCode CI agent:
  *   1. creates the repo (plain, or from [MIA_TEMPLATE_REPO] if set),
  *   2. uploads the `agent-issue-worker.yml` workflow (skipped for the template route,
  *      since the template already carries it),
  *   3. creates the `by-agent` / `done` labels,
- *   4. stores the caller's Gemini API key as the `GEMINI_API_KEY` Actions secret.
+ *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret.
  *
  * Repo creation is the only hard-failure step; everything after it is best-effort and
  * reported as [Result.warnings] so a half-wired repo still surfaces useful feedback
@@ -47,15 +47,15 @@ class RepoBootstrapper(
 
     /**
      * @param owner the authenticated user (repo owner / secrets scope).
-     * @param geminiApiKey the key to store as the Actions secret; when null/blank the
-     *        secret step is skipped with a warning (the workflow can't run without it).
+     * @param agentApiKey the OpenRouter key to store as the Actions secret; when null/blank
+     *        the secret step is skipped with a warning (the workflow can't run without it).
      */
     suspend fun bootstrap(
         owner: String,
         name: String,
         description: String?,
         private: Boolean,
-        geminiApiKey: String?
+        agentApiKey: String?
     ): Result {
         val useTemplate = templateRepo.isNotBlank()
         val repo = if (useTemplate) {
@@ -95,9 +95,9 @@ class RepoBootstrapper(
             }.onFailure { warnings += "label «$label» failed (${it.message})" }
         }
 
-        // 3. Gemini API key secret.
-        if (geminiApiKey.isNullOrBlank()) {
-            warnings += "GEMINI_API_KEY not set — add it in Settings so the agent can run"
+        // 3. OpenRouter API key secret (used by the OpenCode agent in the workflow).
+        if (agentApiKey.isNullOrBlank()) {
+            warnings += "OPENROUTER_API_KEY not set — add it in Settings so the agent can run"
         } else {
             runCatching {
                 val publicKey = api.getRepoPublicKey(owner, repo.name)
@@ -106,12 +106,12 @@ class RepoBootstrapper(
                     repo = repo.name,
                     name = SECRET_NAME,
                     body = PutSecretBody(
-                        encryptedValue = encryptor.seal(geminiApiKey, publicKey.key),
+                        encryptedValue = encryptor.seal(agentApiKey, publicKey.key),
                         keyId = publicKey.keyId
                     )
                 )
                 check(response.isSuccessful) { "HTTP ${response.code()}" }
-            }.onFailure { warnings += "setting GEMINI_API_KEY secret failed (${it.message})" }
+            }.onFailure { warnings += "setting OPENROUTER_API_KEY secret failed (${it.message})" }
         }
 
         return Result(repo, warnings)
@@ -134,7 +134,7 @@ class RepoBootstrapper(
         const val MIA_TEMPLATE_REPO = ""
 
         const val WORKFLOW_PATH = ".github/workflows/agent-issue-worker.yml"
-        const val SECRET_NAME = "GEMINI_API_KEY"
+        const val SECRET_NAME = "OPENROUTER_API_KEY"
 
         /** GitHub label colors are 6-digit hex without a leading '#'. */
         val LABELS = listOf(
