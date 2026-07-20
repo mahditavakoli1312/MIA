@@ -1,0 +1,42 @@
+# Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/).
+#
+# Plain continuous integration: build the app on pushes to the default branch and on every
+# pull request (including the ones the TEC agent opens). It's defensive — a freshly created
+# MIA repo starts as a README with no Gradle project, so the build step no-ops (green) until
+# real code lands, then starts actually assembling the debug APK.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        if: ${{ hashFiles('gradlew') != '' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Assemble (debug)
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            echo "No Gradle wrapper yet — nothing to build. Skipping."
+          fi
