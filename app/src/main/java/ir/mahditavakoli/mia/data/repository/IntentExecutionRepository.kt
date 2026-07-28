@@ -2,6 +2,7 @@ package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.ActionType
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.network.supabase.CreateProjectBody
 import ir.mahditavakoli.mia.network.supabase.CreateTaskBody
@@ -28,14 +29,23 @@ class IntentExecutionRepository(
      * abort the rest, and the returned message summarizes every line. A single-intent batch behaves
      * exactly like [execute] — same message, same failure propagation.
      */
-    suspend fun executeAll(intents: List<VoiceCommandIntent>, agentHandled: Boolean): Result<String> = runCatching {
+    suspend fun executeAll(
+        intents: List<VoiceCommandIntent>,
+        agentHandled: Boolean,
+        usage: TokenUsage? = null
+    ): Result<String> = runCatching {
         require(intents.isNotEmpty()) { "دستوری برای اجرا یافت نشد" }
-        if (intents.size == 1) return@runCatching execute(intents.first(), agentHandled).getOrThrow()
+        // One model call produced this whole batch, so every issue it opens reports the same
+        // spend as shared rather than each claiming the full amount.
+        val issueCount = intents.count { it.actionType == ActionType.ADD_TASK }
+        if (intents.size == 1) {
+            return@runCatching execute(intents.first(), agentHandled, usage, issueCount).getOrThrow()
+        }
         // Explicit loop, not joinToString { }, because execute() is a suspend function and
         // joinToString's transform lambda isn't an inline/suspend-preserving context.
         val lines = ArrayList<String>(intents.size)
         for (intent in intents) {
-            lines += execute(intent, agentHandled).fold(
+            lines += execute(intent, agentHandled, usage, issueCount).fold(
                 onSuccess = { "• $it" },
                 onFailure = { "• ⚠️ ${it.message}" }
             )
@@ -46,12 +56,19 @@ class IntentExecutionRepository(
     /**
      * @param agentHandled whether a created task should be opened as an agent issue
      *        (labeled `by-agent` so the OpenCode CI workflow runs). Ignored by non-task actions.
+     * @param usage what the voice→intent call cost, recorded on the issue a task opens.
+     * @param usageSharedBy how many issues that one call is paying for.
      */
-    suspend fun execute(intent: VoiceCommandIntent, agentHandled: Boolean): Result<String> = runCatching {
+    suspend fun execute(
+        intent: VoiceCommandIntent,
+        agentHandled: Boolean,
+        usage: TokenUsage? = null,
+        usageSharedBy: Int = 1
+    ): Result<String> = runCatching {
         when (intent.actionType) {
             ActionType.CREATE_PROJECT -> createProject(intent)
             ActionType.DELETE_PROJECT -> deleteProject(intent)
-            ActionType.ADD_TASK -> addTask(intent, agentHandled)
+            ActionType.ADD_TASK -> addTask(intent, agentHandled, usage, usageSharedBy)
             ActionType.REMOVE_TASK -> removeTask(intent)
         }
     }
@@ -77,7 +94,12 @@ class IntentExecutionRepository(
         return "پروژه «${intent.projectName}» حذف شد"
     }
 
-    private suspend fun addTask(intent: VoiceCommandIntent, agentHandled: Boolean): String {
+    private suspend fun addTask(
+        intent: VoiceCommandIntent,
+        agentHandled: Boolean,
+        usage: TokenUsage?,
+        usageSharedBy: Int
+    ): String {
         val taskTitle = requireNotNull(intent.taskTitle) { "عنوان تسک مشخص نشده است" }
         val project = findProjectOrThrow(intent.projectName)
         api.createTask(CreateTaskBody(projectId = requireNotNull(project.id), title = taskTitle, dueDate = intent.dueDate))
@@ -85,7 +107,15 @@ class IntentExecutionRepository(
         if (!gitHub.isConfigured) return base
         // Use the canonical stored project name so the repo name matches the one created
         // with the project (the LLM's spoken name may differ by Persian script variants).
-        return gitHub.createIssueForTask(project.name, taskTitle, intent.taskDescription, intent.dueDate, agentHandled).fold(
+        return gitHub.createIssueForTask(
+            projectName = project.name,
+            taskTitle = taskTitle,
+            description = intent.taskDescription,
+            dueDate = intent.dueDate,
+            agentHandled = agentHandled,
+            usage = usage,
+            usageSharedBy = usageSharedBy
+        ).fold(
             onSuccess = { issue ->
                 val suffix = if (agentHandled) " و به ایجنت سپرده شد" else ""
                 "$base و ایشو #${issue.number} در گیت‌هاب ثبت شد$suffix"

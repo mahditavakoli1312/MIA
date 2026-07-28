@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubIssue
@@ -40,12 +41,20 @@ class GitHubRepository(
         )
     }
 
+    /**
+     * @param usage what MIA's own voice→intent call cost, recorded as a footer on the issue so
+     *        the task opens with its spend ledger already started. Null skips the footer.
+     * @param usageSharedBy how many issues that single model call produced (see
+     *        [TokenUsage.asIssueFooter]).
+     */
     suspend fun createIssueForTask(
         projectName: String,
         taskTitle: String,
         description: String?,
         dueDate: String?,
-        agentHandled: Boolean
+        agentHandled: Boolean,
+        usage: TokenUsage? = null,
+        usageSharedBy: Int = 1
     ): Result<GitHubIssue> = runCatching {
         val owner = owner()
         val body = buildString {
@@ -56,6 +65,8 @@ class GitHubRepository(
                     ?: "Task added via MIA for project «$projectName»."
             )
             if (!dueDate.isNullOrBlank()) append("\n\nDue date: ").append(dueDate)
+            // Kept behind a rule so it reads as metadata, not as part of the agent's brief.
+            if (usage != null) append("\n\n---\n").append(usage.asIssueFooter(usageSharedBy))
         }
         api.createIssue(
             owner = owner,

@@ -9,6 +9,10 @@
 # per-issue branch, squash-merges it, and comments back. Nothing is pushed straight to the
 # default branch: every change lands through a reviewable, revertable PR that auto-closes
 # the issue on merge.
+#
+# Every run also accounts for itself: the tokens the model spent on this one issue are posted
+# as a comment, recorded as a `Token-Spend:` trailer on the merged commit, and repeated in the
+# PR body (see .github/scripts/token-usage.js).
 name: Agent Issue Worker (TEC)
 
 on:
@@ -87,6 +91,19 @@ jobs:
             echo "${ISSUE_BODY}"
           } > "${RUNNER_TEMP}/agent-prompt.txt"
 
+      # OpenRouter's credit counter, sampled either side of the run. The delta is what this one
+      # issue actually cost in dollars — the authoritative number even when no per-token
+      # breakdown can be parsed. A `:free` model legitimately moves it by $0.
+      - name: Read OpenRouter credits (before)
+        id: credits_before
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          body="$(curl -sS -m 20 -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/key 2>/dev/null || true)"
+          usage="$(node -e 'try{process.stdout.write(String(JSON.parse(process.argv[1]).data.usage))}catch{}' "$body" || true)"
+          echo "usage=$usage" >> "$GITHUB_OUTPUT"
+
       # OpenCode reads OPENROUTER_API_KEY automatically (no interactive `opencode auth login`).
       # Models are addressed "provider/model" and OpenCode splits on the FIRST "/", so
       # `openrouter/openai/gpt-oss-120b:free` means provider=openrouter, model=openai/gpt-oss-120b:free.
@@ -104,14 +121,64 @@ jobs:
             exit 0
           fi
           log="${RUNNER_TEMP}/opencode-output.log"
-          # `run` is non-interactive; --auto auto-approves file edits so there's no TUI prompt.
-          if opencode run --auto -m "$AGENT_MODEL" \
+
+          # `npm install -g opencode-ai` always brings the newest CLI, and its flags have moved
+          # (--auto became --dangerously-skip-permissions). Ask this build what it supports
+          # rather than hard-coding a name an upgrade can retire.
+          help="$(opencode run --help 2>&1 || true)"
+          approve=""
+          case "$help" in
+            *--dangerously-skip-permissions*) approve="--dangerously-skip-permissions" ;;
+            *--auto*)                         approve="--auto" ;;
+          esac
+          # `--format json` emits the raw event stream, where each assistant message carries its
+          # own token counts — that log is what the spend report is computed from.
+          format=""
+          case "$help" in *--format*) format="--format json" ;; esac
+
+          # Unquoted on purpose: both variables are flag lists that must word-split (or vanish).
+          if opencode run $approve $format -m "$AGENT_MODEL" \
                "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
             echo "status=ok" >> "$GITHUB_OUTPUT"
           elif grep -qiE '429|rate.?limit|quota|exhausted|too many requests|insufficient' "$log"; then
             echo "status=quota" >> "$GITHUB_OUTPUT"
           else
             echo "status=error" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read OpenRouter credits (after)
+        id: credits_after
+        if: steps.agent.outputs.status != 'nokey'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          body="$(curl -sS -m 20 -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            https://openrouter.ai/api/v1/key 2>/dev/null || true)"
+          usage="$(node -e 'try{process.stdout.write(String(JSON.parse(process.argv[1]).data.usage))}catch{}' "$body" || true)"
+          echo "usage=$usage" >> "$GITHUB_OUTPUT"
+
+      # Comment the spend before any of the outcome steps below can fail the job, so a quota
+      # wall or a broken build still tells the user what the attempt cost. Also leaves
+      # token-report.md / token-trailer.txt behind for the PR body and the commit message.
+      - name: Report token spend
+        if: steps.agent.outputs.status != 'nokey'
+        env:
+          OPENCODE_LOG: ${{ runner.temp }}/opencode-output.log
+          REPORT_FILE: ${{ runner.temp }}/token-report.md
+          TRAILER_FILE: ${{ runner.temp }}/token-trailer.txt
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/openai/gpt-oss-120b:free' }}
+          AGENT_STATUS: ${{ steps.agent.outputs.status }}
+          USAGE_BEFORE: ${{ steps.credits_before.outputs.usage }}
+          USAGE_AFTER: ${{ steps.credits_after.outputs.usage }}
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Repos bootstrapped before token accounting shipped have no script — skip quietly.
+          if [ -f .github/scripts/token-usage.js ]; then
+            node .github/scripts/token-usage.js || true
+          else
+            echo "No .github/scripts/token-usage.js in this repo; skipping the spend report."
           fi
 
       - name: Report missing OpenRouter key
@@ -173,14 +240,23 @@ jobs:
               --body "ℹ️ TEC ran but produced no file changes for this issue. Leaving it open for a human to review."
             exit 0
           fi
-          git commit -m "tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+          # The commit itself records what producing it cost (git trailer, machine-readable
+          # via `git log --format=%(trailers:key=Token-Spend)`).
+          TRAILER="$(cat "${RUNNER_TEMP}/token-trailer.txt" 2>/dev/null || true)"
+          if [ -n "$TRAILER" ]; then
+            git commit -m "tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}" -m "$TRAILER"
+          else
+            git commit -m "tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+          fi
 
           # Clear any stale branch from a previous run, then push fresh (no force needed).
           git push origin --delete "$BRANCH" 2>/dev/null || true
           git push -u origin "$BRANCH"
 
-          # PR body auto-closes the issue on merge. printf keeps the blank line intact.
-          PR_BODY="$(printf 'Automated fix for #%s by the TEC agent (OpenCode + free model).\n\nResolves #%s.' "$ISSUE_NUMBER" "$ISSUE_NUMBER")"
+          # PR body auto-closes the issue on merge, and carries the spend report so the cost is
+          # visible on the change itself, not only on the issue. printf keeps the blank lines intact.
+          REPORT="$(cat "${RUNNER_TEMP}/token-report.md" 2>/dev/null || true)"
+          PR_BODY="$(printf 'Automated fix for #%s by the TEC agent (OpenCode + free model).\n\nResolves #%s.\n\n%s' "$ISSUE_NUMBER" "$ISSUE_NUMBER" "$REPORT")"
           PR_URL="$(gh pr create \
             --base "$DEFAULT_BRANCH" --head "$BRANCH" \
             --title "TEC: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}" \
@@ -189,10 +265,15 @@ jobs:
             PR_URL="$(gh pr view "$BRANCH" --json url -q .url 2>/dev/null || true)"
           fi
 
-          # Squash-merge, retrying while GitHub computes mergeability.
+          # Squash-merge, retrying while GitHub computes mergeability. Passing the trailer as the
+          # squash body keeps it on the commit that actually lands on the default branch.
+          merge_args=(--squash --delete-branch)
+          if [ -n "$TRAILER" ]; then
+            merge_args+=(--body "$TRAILER")
+          fi
           merged=""
           for _ in 1 2 3 4 5; do
-            if gh pr merge "$BRANCH" --squash --delete-branch; then
+            if gh pr merge "$BRANCH" "${merge_args[@]}"; then
               merged="yes"; break
             fi
             sleep 5

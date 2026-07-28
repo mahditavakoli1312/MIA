@@ -5,6 +5,9 @@
 // model to respond from each role's perspective (with the issue as context), then posts one
 // reply comment. "@tec" is intentionally NOT handled here — the agent-issue-worker workflow
 // picks that up and actually implements + merges a change.
+//
+// Every reply footers what it cost. OpenRouter returns `usage` (tokens + billed cost) on every
+// response, so advice is accounted for on the issue exactly like TEC's implementation work is.
 
 const commentBody = process.env.COMMENT_BODY || "";
 const issueNumber = process.env.ISSUE_NUMBER;
@@ -33,7 +36,10 @@ const ROLES = {
   },
 };
 
+const fmt = (v) => (Number.isFinite(v) ? v : 0).toLocaleString("en-US");
+
 // Ask the model for one role's response via OpenRouter (OpenAI-compatible API).
+// Returns the answer plus what it cost — `usage` is always present in an OpenRouter reply.
 async function askAI(system, userText) {
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -57,7 +63,20 @@ async function askAI(system, userText) {
       `OpenRouter error ${res.status}: ${JSON.stringify(data).slice(0, 500)}`
     );
   }
-  return (data.choices?.[0]?.message?.content || "").trim();
+  return {
+    text: (data.choices?.[0]?.message?.content || "").trim(),
+    usage: data.usage || null,
+  };
+}
+
+// A per-role line: what this one answer cost, shown small so it doesn't crowd the advice.
+function usageLine(usage) {
+  if (!usage) return "";
+  const total = usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens;
+  return (
+    `\n\n<sub>🧾 ${fmt(total)} tokens ` +
+    `(prompt ${fmt(usage.prompt_tokens)} + output ${fmt(usage.completion_tokens)})</sub>`
+  );
 }
 
 // Post the reply back onto the same issue/PR.
@@ -98,19 +117,43 @@ async function main() {
     `(Persian or English).`;
 
   const sections = [];
+  const spend = { tokens: 0, cost: 0, calls: 0 };
   for (const tag of tagged) {
     const { label, system } = ROLES[tag];
     try {
-      const answer = await askAI(system, context);
-      sections.push(`### ${label}\n${answer}`);
+      const { text, usage } = await askAI(system, context);
+      sections.push(`### ${label}\n${text}${usageLine(usage)}`);
+      if (usage) {
+        spend.tokens +=
+          usage.total_tokens ?? usage.prompt_tokens + usage.completion_tokens;
+        spend.cost += usage.cost || 0;
+        spend.calls += 1;
+      }
     } catch (err) {
       // Free models are rate/quota capped — degrade cleanly instead of crashing.
       sections.push(`### ${label}\n⚠️ Could not get a response: ${err.message}`);
     }
   }
 
-  const reply = "🤖 **AI role responses**\n\n" + sections.join("\n\n---\n\n");
+  const reply =
+    "🤖 **AI role responses**\n\n" + sections.join("\n\n---\n\n") + spendFooter(spend);
   await postComment(reply);
+}
+
+// The bottom line for the whole reply, mirroring what TEC posts after implementing an issue,
+// so one issue's comment thread reads as a single running ledger.
+function spendFooter({ tokens, cost, calls }) {
+  if (calls === 0) return "";
+  const money =
+    cost > 0
+      ? `$${cost.toFixed(4)}`
+      : model.includes(":free")
+        ? "$0.00 (free model)"
+        : "$0.00";
+  return (
+    `\n\n---\n\n🧾 **Spend for this reply** — ${fmt(tokens)} tokens · ` +
+    `${money} · \`${model}\``
+  );
 }
 
 main().catch((err) => {

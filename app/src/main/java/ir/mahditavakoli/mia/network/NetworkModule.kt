@@ -46,15 +46,17 @@ object NetworkModule {
 
     /**
      * The bundled files uploaded to every new repo, mapping each asset to its repo-relative
-     * path: the TEC coding agent, the PO/QC advisor workflow + its script, and the
-     * add-to-project and CI workflows. Together they stand up the whole free-model AI team.
+     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the token-spend
+     * reporter, and the add-to-project and CI workflows. Together they stand up the whole
+     * free-model AI team.
      */
     private val BOOTSTRAP_ASSETS = listOf(
         "agent-issue-worker.yml" to ".github/workflows/agent-issue-worker.yml",
         "ai-role-review.yml" to ".github/workflows/ai-role-review.yml",
         "add-to-project.yml" to ".github/workflows/add-to-project.yml",
         "ci.yml" to ".github/workflows/ci.yml",
-        "ai-role-review.js" to ".github/scripts/ai-role-review.js"
+        "ai-role-review.js" to ".github/scripts/ai-role-review.js",
+        "token-usage.js" to ".github/scripts/token-usage.js"
     )
 
     /** Reads each bundled asset and pairs it with the path it should live at in a new repo. */

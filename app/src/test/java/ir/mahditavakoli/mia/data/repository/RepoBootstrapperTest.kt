@@ -11,13 +11,14 @@ import java.util.Base64
 
 class RepoBootstrapperTest {
 
-    // Stands in for the five real bundled files; the bootstrapper commits each verbatim.
+    // Stands in for the six real bundled files; the bootstrapper commits each verbatim.
     private val files = listOf(
         BootstrapFile(".github/workflows/agent-issue-worker.yml", "name: Agent Issue Worker\n"),
         BootstrapFile(".github/workflows/ai-role-review.yml", "name: AI Role Review\n"),
         BootstrapFile(".github/workflows/add-to-project.yml", "name: Add issues to project\n"),
         BootstrapFile(".github/workflows/ci.yml", "name: CI\n"),
-        BootstrapFile(".github/scripts/ai-role-review.js", "// role review\n")
+        BootstrapFile(".github/scripts/ai-role-review.js", "// role review\n"),
+        BootstrapFile(".github/scripts/token-usage.js", "// token usage\n")
     )
 
     // Deterministic stand-ins for the Android-native crypto so tests run on the JVM.

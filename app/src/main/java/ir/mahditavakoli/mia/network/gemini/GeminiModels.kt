@@ -43,11 +43,26 @@ data class GeminiGenerationConfig(
 
 @Serializable
 data class GeminiResponse(
-    val candidates: List<GeminiCandidate> = emptyList()
+    val candidates: List<GeminiCandidate> = emptyList(),
+    /** Per-call token accounting. Nullable because error responses omit it entirely. */
+    @SerialName("usageMetadata") val usageMetadata: GeminiUsageMetadata? = null
 )
 
 @Serializable
 data class GeminiCandidate(val content: GeminiResponseContent? = null)
+
+/**
+ * What the call cost in tokens. Every field defaults to 0 so a provider that drops one
+ * (older models report no `thoughtsTokenCount`) still decodes.
+ */
+@Serializable
+data class GeminiUsageMetadata(
+    @SerialName("promptTokenCount") val promptTokenCount: Int = 0,
+    @SerialName("candidatesTokenCount") val candidatesTokenCount: Int = 0,
+    /** Thinking tokens on 2.5-series models; billed as output but reported separately. */
+    @SerialName("thoughtsTokenCount") val thoughtsTokenCount: Int = 0,
+    @SerialName("totalTokenCount") val totalTokenCount: Int = 0
+)
 
 @Serializable
 data class GeminiResponseContent(val parts: List<GeminiPart> = emptyList())
