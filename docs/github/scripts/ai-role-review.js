@@ -15,7 +15,7 @@ const issueTitle = process.env.ISSUE_TITLE || "";
 const issueBody = process.env.ISSUE_BODY || "";
 const repo = process.env.REPO; // "owner/name"
 const orKey = process.env.OPENROUTER_API_KEY;
-const model = process.env.AGENT_MODEL || "openai/gpt-oss-120b:free";
+const model = process.env.AGENT_MODEL || "openai/gpt-oss-20b:free";
 const githubToken = process.env.GITHUB_TOKEN;
 
 // Each role gets its own "personality" (system prompt). Edit these freely.

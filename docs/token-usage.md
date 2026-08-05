@@ -28,8 +28,10 @@
 
 ## ۱. چرا این کار لازم است
 
-MIA روی **مدل‌های رایگان** کار می‌کند و مدل‌های رایگان OpenRouter سقف دارند (حدود ۲۰۰ درخواست در
-روز و ۲۰ در دقیقه). وقتی این سقف می‌سوزد، سؤال بعدی همیشه یکی است: **کدام تسک آن را سوزاند؟**
+MIA روی **مدل‌های رایگان** کار می‌کند و مدل‌های رایگان OpenRouter سقف سفت‌وسختی دارند: **۵۰
+درخواست در روز** (و ۱۰۰۰ در روز اگر حساب دست‌کم ۱۰ دلار اعتبار خریده باشد). یک اجرای ایجنتیِ TEC
+به‌راحتی ده‌ها فراخوانی می‌زند، پس وقتی این سقف می‌سوزد سؤال بعدی همیشه یکی است:
+**کدام تسک آن را سوزاند؟**
 
 بدون ثبت مصرف، جواب این سؤال‌ها ممکن نیست:
 
@@ -225,7 +227,7 @@ case "$help" in *--format*) format="--format json" ;; esac
   "cost": 0,
   "tokens": { "total": 36133, "input": 136, "output": 239, "reasoning": 174,
               "cache": { "read": 35584, "write": 0 } },
-  "modelID": "openai/gpt-oss-120b:free",
+  "modelID": "openai/gpt-oss-20b:free",
   "providerID": "openrouter"
 }
 ```
@@ -279,7 +281,7 @@ case "$help" in *--format*) format="--format json" ;; esac
 > | Thinking | 174 |
 > | **Total** | **41,083** |
 >
-> Model `openai/gpt-oss-120b:free` · 2 model calls · cost **$0.00** (free model)
+> Model `openai/gpt-oss-20b:free` · 2 model calls · cost **$0.00** (free model)
 >
 > [Workflow run](https://github.com/…)
 
@@ -295,7 +297,7 @@ case "$help" in *--format*) format="--format json" ;; esac
 ```
 tec: resolve #12 — صفحه ورود
 
-Token-Spend: 41,083 tokens ($0.0000) via openrouter/openai/gpt-oss-120b:free
+Token-Spend: 41,083 tokens ($0.0000) via openrouter/openai/gpt-oss-20b:free
 ```
 
 </div>
@@ -311,7 +313,7 @@ Token-Spend: 41,083 tokens ($0.0000) via openrouter/openai/gpt-oss-120b:free
 >
 > ---
 >
-> 🧾 **Spend for this reply** — 2,406 tokens · $0.00 (free model) · `openai/gpt-oss-120b:free`
+> 🧾 **Spend for this reply** — 2,406 tokens · $0.00 (free model) · `openai/gpt-oss-20b:free`
 
 </div>
 
