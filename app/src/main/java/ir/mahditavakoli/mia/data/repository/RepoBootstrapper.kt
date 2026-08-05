@@ -22,13 +22,18 @@ fun interface SecretEncryptor {
     fun seal(plaintext: String, publicKeyBase64: String): String
 }
 
+/** A file to commit into a freshly created repo. [repoPath] is the repo-relative path. */
+data class BootstrapFile(val repoPath: String, val content: String)
+
 /**
- * Wires a freshly created repository up to the OpenCode CI agent:
+ * Wires a freshly created repository up to the whole MIA "AI team":
  *   1. creates the repo (plain, or from [MIA_TEMPLATE_REPO] if set),
- *   2. uploads the `agent-issue-worker.yml` workflow (skipped for the template route,
- *      since the template already carries it),
+ *   2. commits the [files] — the TEC coding agent, the PO/QC advisor workflow + script, the
+ *      add-to-project and CI workflows (skipped for the template route, since the template
+ *      already carries them),
  *   3. creates the `by-agent` / `done` labels,
- *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret.
+ *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
+ *      (the single free-model key that powers CI + PO + TEC + QC).
  *
  * Repo creation is the only hard-failure step; everything after it is best-effort and
  * reported as [Result.warnings] so a half-wired repo still surfaces useful feedback
@@ -38,7 +43,7 @@ class RepoBootstrapper(
     private val api: GitHubApi,
     private val base64: Base64Encoder,
     private val encryptor: SecretEncryptor,
-    private val workflowYaml: String,
+    private val files: List<BootstrapFile>,
     private val templateRepo: String = MIA_TEMPLATE_REPO
 ) {
 
@@ -71,20 +76,22 @@ class RepoBootstrapper(
 
         val warnings = mutableListOf<String>()
 
-        // 1. Workflow file — only when we didn't clone a template that already has it.
+        // 1. Team files — only when we didn't clone a template that already carries them.
         if (!useTemplate) {
-            runCatching {
-                val response = api.putContent(
-                    owner = owner,
-                    repo = repo.name,
-                    path = WORKFLOW_PATH,
-                    body = PutContentBody(
-                        message = "chore: add MIA agent issue worker",
-                        content = base64.encode(workflowYaml.toByteArray(Charsets.UTF_8))
+            for (file in files) {
+                runCatching {
+                    val response = api.putContent(
+                        owner = owner,
+                        repo = repo.name,
+                        path = file.repoPath,
+                        body = PutContentBody(
+                            message = "chore(mia): add ${file.repoPath}",
+                            content = base64.encode(file.content.toByteArray(Charsets.UTF_8))
+                        )
                     )
-                )
-                check(response.isSuccessful) { "HTTP ${response.code()}" }
-            }.onFailure { warnings += "workflow upload failed (${it.message})" }
+                    check(response.isSuccessful) { "HTTP ${response.code()}" }
+                }.onFailure { warnings += "upload of «${file.repoPath}» failed (${it.message})" }
+            }
         }
 
         // 2. Labels — 422 means it already exists, which is fine.
@@ -133,7 +140,6 @@ class RepoBootstrapper(
          */
         const val MIA_TEMPLATE_REPO = ""
 
-        const val WORKFLOW_PATH = ".github/workflows/agent-issue-worker.yml"
         const val SECRET_NAME = "OPENROUTER_API_KEY"
 
         /** GitHub label colors are 6-digit hex without a leading '#'. */

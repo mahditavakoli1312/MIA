@@ -11,17 +11,25 @@ import java.util.Base64
 
 class RepoBootstrapperTest {
 
-    private val workflowYaml = "name: Agent Issue Worker\n"
+    // Stands in for the six real bundled files; the bootstrapper commits each verbatim.
+    private val files = listOf(
+        BootstrapFile(".github/workflows/agent-issue-worker.yml", "name: Agent Issue Worker\n"),
+        BootstrapFile(".github/workflows/ai-role-review.yml", "name: AI Role Review\n"),
+        BootstrapFile(".github/workflows/add-to-project.yml", "name: Add issues to project\n"),
+        BootstrapFile(".github/workflows/ci.yml", "name: CI\n"),
+        BootstrapFile(".github/scripts/ai-role-review.js", "// role review\n"),
+        BootstrapFile(".github/scripts/token-usage.js", "// token usage\n")
+    )
 
     // Deterministic stand-ins for the Android-native crypto so tests run on the JVM.
     private val base64 = Base64Encoder { Base64.getEncoder().encodeToString(it) }
     private val encryptor = SecretEncryptor { plaintext, publicKey -> "sealed($plaintext|$publicKey)" }
 
     private fun bootstrapper(api: FakeGitHubApi, template: String = "") =
-        RepoBootstrapper(api, base64, encryptor, workflowYaml, templateRepo = template)
+        RepoBootstrapper(api, base64, encryptor, files, templateRepo = template)
 
     @Test
-    fun `plain creation uploads workflow, creates both labels, sets secret`() = runBlocking {
+    fun `plain creation uploads all team files, creates both labels, sets secret`() = runBlocking {
         val api = FakeGitHubApi()
 
         val result = bootstrapper(api).bootstrap(
@@ -36,10 +44,12 @@ class RepoBootstrapperTest {
         assertNotNull("repo should be created via plain create", api.createRepoBody)
         assertNull("template route must not be used", api.generateBody)
 
-        // Workflow uploaded to the right path, base64-encoded.
-        val (path, content) = api.putContents.single()
-        assertEquals(RepoBootstrapper.WORKFLOW_PATH, path)
-        assertEquals(base64.encode(workflowYaml.toByteArray()), content.content)
+        // Every bundled file uploaded to its path, base64-encoded, and nothing extra.
+        val uploaded = api.putContents.associate { (path, body) -> path to body.content }
+        assertEquals(files.map { it.repoPath }.toSet(), uploaded.keys)
+        for (file in files) {
+            assertEquals(base64.encode(file.content.toByteArray()), uploaded[file.repoPath])
+        }
 
         // Both labels with the required colors.
         assertEquals(
@@ -98,12 +108,14 @@ class RepoBootstrapperTest {
     }
 
     @Test
-    fun `workflow upload failure is reported as a warning but does not throw`() = runBlocking {
+    fun `file upload failure is reported as a warning but does not throw`() = runBlocking {
         val api = FakeGitHubApi().apply { putContentResponse = { FakeGitHubApi.error(500) } }
 
         val result = bootstrapper(api).bootstrap("octocat", "r", null, true, "k")
 
-        assertTrue(result.warnings.any { it.contains("workflow") })
+        // One warning per failed file, each naming its path — but the run still finishes.
+        assertEquals(files.size, result.warnings.count { it.contains("upload of") })
+        assertTrue(result.warnings.any { it.contains("agent-issue-worker.yml") })
         // Later steps still ran.
         assertEquals(2, api.createdLabels.size)
         assertNotNull(api.putSecretBody)

@@ -1,0 +1,32 @@
+# Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/).
+#
+# Auto-adds every new/reopened issue to a GitHub Projects (v2) board so the whole team's work
+# shows up on one board. This is OPT-IN and degrades cleanly: the job is skipped unless a
+# PROJECT_URL repo/organization variable is set. Because the default GITHUB_TOKEN can't write
+# user/organization Projects, it also needs a PROJECTS_TOKEN secret — a PAT (classic: `project`
+# scope, or fine-grained: Projects read/write) — to be configured.
+#
+# Setup (once):
+#   • Settings → Secrets and variables → Actions → Variables:  PROJECT_URL =
+#       https://github.com/users/<you>/projects/<n>   (or .../orgs/<org>/projects/<n>)
+#   • Settings → Secrets and variables → Actions → Secrets:    PROJECTS_TOKEN = <PAT>
+name: Add issues to project
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  add-to-project:
+    runs-on: ubuntu-latest
+    # Skip entirely (green, no-op) until a board URL is configured.
+    if: ${{ vars.PROJECT_URL != '' }}
+    steps:
+      - name: Add issue to the project board
+        uses: actions/add-to-project@v2
+        with:
+          project-url: ${{ vars.PROJECT_URL }}
+          github-token: ${{ secrets.PROJECTS_TOKEN }}

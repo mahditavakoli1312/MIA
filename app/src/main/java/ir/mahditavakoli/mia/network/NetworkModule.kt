@@ -3,6 +3,7 @@ package ir.mahditavakoli.mia.network
 import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
+import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
@@ -43,17 +44,34 @@ object NetworkModule {
         secretStore = SecretStore(appContext)
     }
 
-    /** The bundled GitHub Actions workflow that gets uploaded to every new repo. */
-    fun readWorkflowYaml(): String =
-        appContext.assets.open("agent-issue-worker.yml").bufferedReader().use { it.readText() }
+    /**
+     * The bundled files uploaded to every new repo, mapping each asset to its repo-relative
+     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the token-spend
+     * reporter, and the add-to-project and CI workflows. Together they stand up the whole
+     * free-model AI team.
+     */
+    private val BOOTSTRAP_ASSETS = listOf(
+        "agent-issue-worker.yml" to ".github/workflows/agent-issue-worker.yml",
+        "ai-role-review.yml" to ".github/workflows/ai-role-review.yml",
+        "add-to-project.yml" to ".github/workflows/add-to-project.yml",
+        "ci.yml" to ".github/workflows/ci.yml",
+        "ai-role-review.js" to ".github/scripts/ai-role-review.js",
+        "token-usage.js" to ".github/scripts/token-usage.js"
+    )
 
-    /** Wires new repos up to the Gemini agent (workflow, labels, secret). */
+    /** Reads each bundled asset and pairs it with the path it should live at in a new repo. */
+    fun readBootstrapFiles(): List<BootstrapFile> = BOOTSTRAP_ASSETS.map { (asset, path) ->
+        val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
+        BootstrapFile(repoPath = path, content = content)
+    }
+
+    /** Wires new repos up to the AI team (workflows + script, labels, secret). */
     val repoBootstrapper: RepoBootstrapper by lazy {
         RepoBootstrapper(
             api = gitHubApi,
             base64 = AndroidBase64Encoder,
             encryptor = LibsodiumSecretEncryptor,
-            workflowYaml = readWorkflowYaml()
+            files = readBootstrapFiles()
         )
     }
 

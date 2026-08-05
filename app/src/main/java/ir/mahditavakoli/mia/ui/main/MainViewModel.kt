@@ -3,6 +3,7 @@ package ir.mahditavakoli.mia.ui.main
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.GeminiVoiceIntentClassifier
@@ -135,7 +136,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Pass the currently-loaded projects so Gemini can resolve spoken names
             // against real data instead of guessing from the audio alone.
             intentClassifier.classify(audio, _uiState.value.projects).fold(
-                onSuccess = { intents -> executeIntents(intents) },
+                onSuccess = { result -> executeIntents(result.intents, result.usage) },
                 onFailure = { error ->
                     _uiState.update { it.copy(recordingState = RecordingState.Idle) }
                     emitEvent("متوجه دستور نشدم: ${error.message}")
@@ -157,12 +158,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun executeIntents(intents: List<VoiceCommandIntent>) {
-        val result = intentExecutionRepository.executeAll(intents, _uiState.value.agentHandledByDefault)
+    private suspend fun executeIntents(intents: List<VoiceCommandIntent>, usage: TokenUsage?) {
+        val result = intentExecutionRepository.executeAll(
+            intents = intents,
+            agentHandled = _uiState.value.agentHandledByDefault,
+            usage = usage
+        )
         _uiState.update { it.copy(recordingState = RecordingState.Idle) }
         result.fold(
             onSuccess = { message ->
-                emitEvent(message)
+                // Show what understanding the command cost, mirroring the footer left on the issue.
+                emitEvent(if (usage == null) message else "$message\n${usage.asPersianSummary()}")
                 refreshProjects()
             },
             onFailure = { error -> emitEvent(error.message ?: "خطایی رخ داد") }

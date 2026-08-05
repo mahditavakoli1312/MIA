@@ -2,6 +2,7 @@ package ir.mahditavakoli.mia.data.repository
 
 import android.util.Base64
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.gemini.GeminiContent
@@ -21,6 +22,9 @@ import retrofit2.HttpException
  *
  * The response is an ARRAY of intents: a single spoken command may describe several distinct
  * pieces of work, which the model splits into multiple focused issues (see [GeminiIntentPrompt]).
+ *
+ * Gemini also reports what the call cost, which is carried back as [Classification.usage] so the
+ * issues opened for this command can record MIA's own token spend alongside the agents' later.
  */
 class GeminiVoiceIntentClassifier(
     private val api: GeminiApi,
@@ -29,10 +33,17 @@ class GeminiVoiceIntentClassifier(
     private val apiKeyProvider: () -> String?,
     private val model: String = "gemini-2.5-flash"
 ) {
+    /** The intents a command produced, plus what the one call to extract them cost. */
+    data class Classification(
+        val intents: List<VoiceCommandIntent>,
+        /** Null when the response carried no `usageMetadata` — reporting then degrades to silent. */
+        val usage: TokenUsage?
+    )
+
     suspend fun classify(
         wavAudio: ByteArray,
         projects: List<Project> = emptyList()
-    ): Result<List<VoiceCommandIntent>> = runCatching {
+    ): Result<Classification> = runCatching {
         val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() }
             ?: error("کلید Gemini تنظیم نشده است؛ آن را در تنظیمات وارد کنید")
         require(wavAudio.isNotEmpty()) { "صدایی برای تحلیل ضبط نشد" }
@@ -63,8 +74,21 @@ class GeminiVoiceIntentClassifier(
             ?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
             ?: error("پاسخ خالی از Gemini دریافت شد")
 
-        parseIntents(sanitize(rawContent))
-            .ifEmpty { error("هیچ دستوری از صدا استخراج نشد") }
+        Classification(
+            intents = parseIntents(sanitize(rawContent))
+                .ifEmpty { error("هیچ دستوری از صدا استخراج نشد") },
+            usage = response.usageMetadata?.let { usage ->
+                TokenUsage(
+                    model = model,
+                    promptTokens = usage.promptTokenCount,
+                    outputTokens = usage.candidatesTokenCount,
+                    reasoningTokens = usage.thoughtsTokenCount,
+                    // Prefer Gemini's own total, but fall back to the sum if it reported none.
+                    totalTokens = usage.totalTokenCount.takeIf { it > 0 }
+                        ?: (usage.promptTokenCount + usage.candidatesTokenCount + usage.thoughtsTokenCount)
+                )
+            }
+        )
     }
 
     // Google reports a bad classic key (AIza…) as 400 API_KEY_INVALID but a bad new-format

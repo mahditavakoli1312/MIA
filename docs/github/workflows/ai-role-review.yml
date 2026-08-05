@@ -1,0 +1,49 @@
+# Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/).
+#
+# The advisory agents. When someone comments "@po" (Product Owner) or "@qc" (QA/QC) on an
+# issue or PR, a FREE OpenRouter model answers from that role's perspective and posts one
+# reply. These roles only ADVISE — "@tec" is handled by agent-issue-worker.yml, which
+# actually clones, develops, and merges a fix.
+name: AI Role Review (PO / QC)
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    # Skip the bot's own comments (avoid loops) and only run when @po or @qc is tagged.
+    # @tec is deliberately excluded — the TEC doer workflow handles it.
+    if: >
+      github.event.comment.user.type != 'Bot' &&
+      (contains(github.event.comment.body, '@po') ||
+       contains(github.event.comment.body, '@qc'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run AI responder
+        env:
+          # Reuse the same secret the TEC agent workflow already uses.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Same free model family; override with an AGENT_MODEL repo variable.
+          # (Raw OpenRouter model id — NO "openrouter/" prefix here.)
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openai/gpt-oss-20b:free' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: node .github/scripts/ai-role-review.js
