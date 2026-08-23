@@ -15,7 +15,10 @@ const issueTitle = process.env.ISSUE_TITLE || "";
 const issueBody = process.env.ISSUE_BODY || "";
 const repo = process.env.REPO; // "owner/name"
 const orKey = process.env.OPENROUTER_API_KEY;
-const model = process.env.AGENT_MODEL || "openai/gpt-oss-20b:free";
+const model = process.env.AGENT_MODEL || "stealth/ox-alpha";
+// Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models
+// (e.g. stealth/ox-alpha), which carry no suffix but still bill nothing.
+const isFreeModel = (id) => id.includes(":free") || id.includes("stealth/");
 const githubToken = process.env.GITHUB_TOKEN;
 
 // Each role gets its own "personality" (system prompt). Edit these freely.
@@ -147,7 +150,7 @@ function spendFooter({ tokens, cost, calls }) {
   const money =
     cost > 0
       ? `$${cost.toFixed(4)}`
-      : model.includes(":free")
+      : isFreeModel(model)
         ? "$0.00 (free model)"
         : "$0.00";
   return (

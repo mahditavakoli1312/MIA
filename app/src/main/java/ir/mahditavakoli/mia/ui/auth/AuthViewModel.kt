@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.mahditavakoli.mia.data.repository.AuthRepository
 import ir.mahditavakoli.mia.network.NetworkModule
+import ir.mahditavakoli.mia.network.toPersianMessage
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +36,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun login() = submit { username, password ->
         authRepository.login(username, password).fold(
             onSuccess = { /* SessionManager flips isLoggedIn -> MainActivity swaps the screen */ },
-            onFailure = { error -> _events.trySend(error.message ?: "ورود ناموفق بود") }
+            onFailure = { error -> _events.trySend(error.toPersianMessage("ورود ناموفق بود")) }
         )
     }
 
@@ -44,7 +45,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             onSuccess = { loggedIn ->
                 if (!loggedIn) _events.trySend("حساب ساخته شد. حالا وارد شوید.")
             },
-            onFailure = { error -> _events.trySend(error.message ?: "ساخت حساب ناموفق بود") }
+            onFailure = { error -> _events.trySend(error.toPersianMessage("ساخت حساب ناموفق بود")) }
         )
     }
 
