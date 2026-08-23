@@ -10,6 +10,7 @@ import ir.mahditavakoli.mia.data.repository.GeminiVoiceIntentClassifier
 import ir.mahditavakoli.mia.data.repository.IntentExecutionRepository
 import ir.mahditavakoli.mia.data.repository.ProjectRepository
 import ir.mahditavakoli.mia.network.NetworkModule
+import ir.mahditavakoli.mia.network.toPersianMessage
 import ir.mahditavakoli.mia.voice.VoiceRecorder
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -152,7 +153,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 onSuccess = { projects -> _uiState.update { it.copy(projects = projects, isLoadingProjects = false) } },
                 onFailure = { error ->
                     _uiState.update { it.copy(isLoadingProjects = false) }
-                    emitEvent(error.message ?: "خطا در بارگذاری پروژه‌ها")
+                    emitEvent(error.toPersianMessage("خطا در بارگذاری پروژه‌ها"))
                 }
             )
         }
@@ -171,7 +172,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 emitEvent(if (usage == null) message else "$message\n${usage.asPersianSummary()}")
                 refreshProjects()
             },
-            onFailure = { error -> emitEvent(error.message ?: "خطایی رخ داد") }
+            onFailure = { error -> emitEvent(error.toPersianMessage("خطایی رخ داد")) }
         )
     }
 

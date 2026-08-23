@@ -37,9 +37,9 @@ jobs:
         env:
           # Reuse the same secret the TEC agent workflow already uses.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Same free model family; override with an AGENT_MODEL repo variable.
+          # Same free model as TEC; override with an AGENT_MODEL repo variable.
           # (Raw OpenRouter model id — NO "openrouter/" prefix here.)
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openai/gpt-oss-20b:free' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'stealth/ox-alpha' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

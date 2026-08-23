@@ -93,7 +93,7 @@ jobs:
 
       # OpenRouter's credit counter, sampled either side of the run. The delta is what this one
       # issue actually cost in dollars — the authoritative number even when no per-token
-      # breakdown can be parsed. A `:free` model legitimately moves it by $0.
+      # breakdown can be parsed. A free model (`:free`, or stealth/ox-alpha) legitimately moves it by $0.
       - name: Read OpenRouter credits (before)
         id: credits_before
         env:
@@ -106,17 +106,18 @@ jobs:
 
       # OpenCode reads OPENROUTER_API_KEY automatically (no interactive `opencode auth login`).
       # Models are addressed "provider/model" and OpenCode splits on the FIRST "/", so
-      # `openrouter/openai/gpt-oss-20b:free` means provider=openrouter, model=openai/gpt-oss-20b:free.
-      # gpt-oss-20b is the only free OpenAI model OpenRouter still lists, and it supports tool
-      # calling — which OpenCode needs to edit files at all. Free models are capped at 50
-      # requests/day (1000/day once the account holds $10+ of credit), and one agentic run can
-      # burn a dozen; override with an AGENT_MODEL repo/environment variable for more headroom.
+      # `openrouter/stealth/ox-alpha` means provider=openrouter, model=stealth/ox-alpha.
+      # stealth/ox-alpha is a free stealth model (no charge for prompt or completion tokens)
+      # with a 1M-token context and tool calling — which OpenCode needs to edit files at all.
+      # Being anonymously operated, it can be rate limited or withdrawn without notice, and its
+      # prompts/completions are retained by the provider (not used for training), so don't send
+      # it anything secret; override with an AGENT_MODEL repo/environment variable to switch.
       # The step degrades cleanly on a 429 instead of failing red.
       - name: Run OpenCode CLI
         id: agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/openai/gpt-oss-20b:free' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/stealth/ox-alpha' }}
         run: |
           set -o pipefail
           if [ -z "$OPENROUTER_API_KEY" ]; then
@@ -169,7 +170,7 @@ jobs:
           OPENCODE_LOG: ${{ runner.temp }}/opencode-output.log
           REPORT_FILE: ${{ runner.temp }}/token-report.md
           TRAILER_FILE: ${{ runner.temp }}/token-trailer.txt
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/openai/gpt-oss-20b:free' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/stealth/ox-alpha' }}
           AGENT_STATUS: ${{ steps.agent.outputs.status }}
           USAGE_BEFORE: ${{ steps.credits_before.outputs.usage }}
           USAGE_AFTER: ${{ steps.credits_after.outputs.usage }}
@@ -195,7 +196,7 @@ jobs:
       - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter free-tier quota/rate limit was hit (HTTP 429).\n\nFree models are capped (50 requests/day, or 1000/day once you have $10+ of OpenRouter credit). Wait for the quota to reset, point the `AGENT_MODEL` variable at another free model, or add OpenRouter credit — then comment `@tec` again to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429).\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit), and stealth models such as `stealth/ox-alpha` at whatever their provider allows. Wait for the limit to reset, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'
