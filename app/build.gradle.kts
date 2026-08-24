@@ -30,13 +30,13 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "GAPGPT_API_KEY", "\"${secret("GAPGPT_API_KEY")}\"")
         buildConfigField("String", "GITHUB_TOKEN", "\"${secret("GITHUB_TOKEN")}\"")
         // Optional build-time default for the Gemini key (on-device voice→intent); the
         // runtime value entered in Settings (stored encrypted) takes precedence. See SecretStore.
         buildConfigField("String", "GEMINI_API_KEY", "\"${secret("GEMINI_API_KEY")}\"")
-        // Optional build-time default for the OpenRouter key that powers the CI issue agent
-        // (pushed to each repo as the OPENROUTER_API_KEY Actions secret); runtime override wins.
+        // Optional build-time default for the OpenRouter key. It powers both the in-app typed
+        // commands (stealth/ox-alpha) and the CI issue agent (pushed to each repo as the
+        // OPENROUTER_API_KEY Actions secret); the runtime override from Settings wins.
         buildConfigField("String", "OPENROUTER_API_KEY", "\"${secret("OPENROUTER_API_KEY")}\"")
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")

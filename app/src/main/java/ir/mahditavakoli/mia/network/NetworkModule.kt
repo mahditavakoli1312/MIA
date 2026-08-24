@@ -34,7 +34,7 @@ object NetworkModule {
     lateinit var sessionManager: SessionManager
         private set
 
-    /** Encrypted store for the runtime Gemini API key + the agent-handled default toggle. */
+    /** Encrypted store for the runtime Gemini/OpenRouter keys + the agent-handled toggle. */
     lateinit var secretStore: SecretStore
         private set
 
@@ -91,6 +91,15 @@ object NetworkModule {
     }
     private val geminiConverterFactory = geminiJson.asConverterFactory("application/json".toMediaType())
 
+    // Same reason as Gemini's: `response_format` is only sent for the step that needs it, and
+    // OpenAI-compatible endpoints reject an explicit "response_format": null.
+    private val openRouterJson: Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
+    private val openRouterConverterFactory = openRouterJson.asConverterFactory("application/json".toMediaType())
+
     // Shows every request/response (headers, body, timing) in a notification + in-app UI.
     // library-no-op is swapped in for release builds, so this is a complete no-op in production.
     private val chuckerInterceptor by lazy { ChuckerInterceptor.Builder(appContext).build() }
@@ -103,9 +112,12 @@ object NetworkModule {
         }
     }
 
-    private val openRouterAuthInterceptor = Interceptor { chain ->
+    // OpenRouter asks callers to identify the app; both headers are optional and public, and
+    // only affect how the traffic shows up on the OpenRouter dashboard/leaderboards.
+    private val openRouterAttributionInterceptor = Interceptor { chain ->
         val request = chain.request().newBuilder()
-            .addHeader("Authorization", "Bearer ${BuildConfig.GAPGPT_API_KEY}")
+            .addHeader("HTTP-Referer", "https://github.com/mahditavakoli/mia")
+            .addHeader("X-Title", "MIA")
             .build()
         chain.proceed(request)
     }
@@ -141,17 +153,22 @@ object NetworkModule {
         chain.proceed(request)
     }
 
+    /**
+     * Typed commands: prompt pre-processing then intent extraction on `stealth/ox-alpha`.
+     * The key is not in an interceptor — it is passed per call from [secretStore], so a key the
+     * user edits in Settings takes effect immediately instead of on the next app start.
+     */
     val openRouterApi: OpenRouterApi by lazy {
         Retrofit.Builder()
-            .baseUrl("https://api.gapgpt.app/")
+            .baseUrl("https://openrouter.ai/api/")
             .client(
                 OkHttpClient.Builder()
-                    .addInterceptor(openRouterAuthInterceptor)
+                    .addInterceptor(openRouterAttributionInterceptor)
                     .addInterceptor(loggingInterceptor)
                     .addInterceptor(chuckerInterceptor)
                     .build()
             )
-            .addConverterFactory(converterFactory)
+            .addConverterFactory(openRouterConverterFactory)
             .build()
             .create()
     }

@@ -1,34 +1,23 @@
 package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.ActionType
-import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Verifies the JSON contract that [GeminiVoiceIntentClassifier.parseIntents] depends on: Gemini
- * now returns an ARRAY of intents so one complex command can split into multiple issues, and each
- * add_task carries a multi-section Persian Markdown brief. The classifier's parse logic is
- * mirrored here (parse element -> array vs bare object) since it is private.
+ * The JSON contract both front doors must satisfy: the model returns an ARRAY of intents so one
+ * command can split into multiple issues, and each add_task carries a multi-section Persian
+ * Markdown brief. [IntentJsonTest] covers recovering that array from a messy answer; this covers
+ * what the array itself has to decode into.
  */
 class VoiceCommandIntentParsingTest {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    /** Same branching as the classifier's private parseIntents. */
-    private fun parseIntents(raw: String): List<VoiceCommandIntent> {
-        val element = json.parseToJsonElement(raw)
-        return if (element is JsonArray) {
-            json.decodeFromJsonElement(ListSerializer(VoiceCommandIntent.serializer()), element)
-        } else {
-            listOf(json.decodeFromJsonElement(VoiceCommandIntent.serializer(), element))
-        }
-    }
+    private fun parseIntents(raw: String) = IntentJson.parseIntents(json, raw)
 
     @Test
     fun `complex command decodes into project plus multiple task issues`() {
@@ -55,17 +44,5 @@ class VoiceCommandIntentParsingTest {
 
         assertEquals("ورود با گوگل", intents[2].taskTitle)
         assertNull(intents[2].dueDate)
-    }
-
-    @Test
-    fun `bare object response is tolerated as a single-intent list`() {
-        val raw =
-            """{"action_type":"create_project","project_name":"وبسایت","task_title":null,"task_description":null,"due_date":null}"""
-
-        val intents = parseIntents(raw)
-
-        assertEquals(1, intents.size)
-        assertEquals(ActionType.CREATE_PROJECT, intents.single().actionType)
-        assertEquals("وبسایت", intents.single().projectName)
     }
 }

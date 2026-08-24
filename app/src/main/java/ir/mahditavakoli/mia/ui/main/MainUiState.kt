@@ -8,14 +8,47 @@ sealed interface RecordingState {
     data object Processing : RecordingState
 }
 
+/**
+ * Which stage of a command is running, so the status banner can say something truthful instead
+ * of a single opaque "processing" for what is really three different waits.
+ */
+enum class CommandStage {
+    /** Nothing in flight. */
+    NONE,
+
+    /** Typed text is being rewritten into an explicit prompt (OpenRouter pre-processing). */
+    REFINING,
+
+    /** The prompt (or the recorded audio) is being turned into intent JSON. */
+    UNDERSTANDING,
+
+    /** Intents are being executed against Supabase/GitHub. */
+    EXECUTING
+}
+
 data class MainUiState(
     val projects: List<Project> = emptyList(),
     val isLoadingProjects: Boolean = false,
     val recordingState: RecordingState = RecordingState.Idle,
+    /** What the user has typed in the command field but not yet sent. */
+    val commandText: String = "",
+    val stage: CommandStage = CommandStage.NONE,
+    /**
+     * The cleaned-up prompt the last typed command was actually understood from, shown back to
+     * the user so the pre-processing step is visible rather than a black box.
+     */
+    val refinedPrompt: String? = null,
     /** New voice-created tasks are handed to the CI agent (labeled "by-agent"). */
     val agentHandledByDefault: Boolean = true,
     /** What the user last saved as the Gemini API key (empty if none / using build default). */
     val geminiApiKey: String = "",
-    /** What the user last saved as the OpenRouter API key for the CI agent (empty if none). */
+    /** What the user last saved as the OpenRouter API key (empty if none). */
     val openRouterApiKey: String = ""
-)
+) {
+    /** True while any command is in flight — both front doors stay disabled until it lands. */
+    val isBusy: Boolean get() = recordingState is RecordingState.Processing
+
+    /** The send button is only meaningful with text to send and nothing already running. */
+    val canSendText: Boolean get() = commandText.isNotBlank() && !isBusy &&
+        recordingState !is RecordingState.Listening
+}
