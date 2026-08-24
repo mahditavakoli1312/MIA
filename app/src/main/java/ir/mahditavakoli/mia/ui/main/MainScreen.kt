@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -82,6 +83,9 @@ fun MainScreen(
     // rather than mirroring every individual row.
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
+            // The command field is in the bottom bar, so the whole scaffold has to lift with
+            // the keyboard — the activity draws edge-to-edge and would otherwise cover it.
+            modifier = Modifier.imePadding(),
             topBar = {
                 TopAppBar(
                     title = { Text("پروژه‌های من") },
@@ -107,6 +111,19 @@ fun MainScreen(
             },
             containerColor = MaterialTheme.colorScheme.background,
             snackbarHost = { SnackbarHost(snackbarHostState) },
+            // Typed commands live in the bottom bar; the mic FAB docks above it, so the two
+            // ways of giving MIA a command sit together instead of competing for the corner.
+            bottomBar = {
+                CommandInputBar(
+                    text = uiState.commandText,
+                    refinedPrompt = uiState.refinedPrompt,
+                    stage = uiState.stage,
+                    canSend = uiState.canSendText,
+                    onTextChange = viewModel::onCommandTextChange,
+                    onSend = viewModel::onSendText,
+                    onDismissRefinedPrompt = viewModel::clearRefinedPrompt
+                )
+            },
             floatingActionButtonPosition = FabPosition.Center,
             floatingActionButton = {
                 MicFab(
@@ -134,7 +151,7 @@ fun MainScreen(
                     )
 
                     uiState.projects.isEmpty() -> Text(
-                        text = "هنوز پروژه‌ای نساخته‌اید.\nدکمه میکروفون را بزنید و بگویید:\n«یک پروژه جدید به اسم … بساز»",
+                        text = "هنوز پروژه‌ای نساخته‌اید.\nدکمه میکروفون را بزنید یا بنویسید:\n«یک پروژه جدید به اسم … بساز»",
                         modifier = Modifier
                             .align(Alignment.Center)
                             .padding(32.dp),
@@ -145,7 +162,8 @@ fun MainScreen(
 
                     else -> LazyColumn(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 120.dp)
+                        // Extra bottom room so the docked mic FAB never covers the last card.
+                        contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 72.dp)
                     ) {
                         items(uiState.projects, key = { it.id ?: it.name }) { project ->
                             ProjectCard(project, modifier = Modifier.padding(bottom = 12.dp))
@@ -161,7 +179,7 @@ fun MainScreen(
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
-                    StatusBanner(uiState.recordingState)
+                    StatusBanner(uiState.recordingState, uiState.stage)
                 }
             }
         }
@@ -183,10 +201,17 @@ fun MainScreen(
 }
 
 @Composable
-private fun StatusBanner(state: RecordingState) {
+private fun StatusBanner(state: RecordingState, stage: CommandStage) {
     val text = when (state) {
         RecordingState.Listening -> "در حال شنیدن..."
-        RecordingState.Processing -> "در حال پردازش..."
+        // Naming the stage matters most for typed commands, where "processing" covers two
+        // separate model calls and the wait is long enough to look like a hang.
+        RecordingState.Processing -> when (stage) {
+            CommandStage.REFINING -> "در حال آماده‌سازی پرامپت..."
+            CommandStage.UNDERSTANDING -> "در حال درک دستور..."
+            CommandStage.EXECUTING -> "در حال اجرا..."
+            CommandStage.NONE -> "در حال پردازش..."
+        }
         RecordingState.Idle -> return
     }
     Surface(

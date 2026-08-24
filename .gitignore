@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin compiler daemon session files (created by Gradle builds)
+.kotlin/

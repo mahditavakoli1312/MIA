@@ -3,16 +3,13 @@ package ir.mahditavakoli.mia.data.repository
 import android.util.Base64
 import ir.mahditavakoli.mia.data.model.Project
 import ir.mahditavakoli.mia.data.model.TokenUsage
-import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.gemini.GeminiContent
 import ir.mahditavakoli.mia.network.gemini.GeminiInlineData
 import ir.mahditavakoli.mia.network.gemini.GeminiIntentPrompt
 import ir.mahditavakoli.mia.network.gemini.GeminiPart
 import ir.mahditavakoli.mia.network.gemini.GeminiRequest
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import retrofit2.HttpException
 
 /**
@@ -23,7 +20,7 @@ import retrofit2.HttpException
  * The response is an ARRAY of intents: a single spoken command may describe several distinct
  * pieces of work, which the model splits into multiple focused issues (see [GeminiIntentPrompt]).
  *
- * Gemini also reports what the call cost, which is carried back as [Classification.usage] so the
+ * Gemini also reports what the call cost, carried back as [CommandClassification.usage] so the
  * issues opened for this command can record MIA's own token spend alongside the agents' later.
  */
 class GeminiVoiceIntentClassifier(
@@ -33,17 +30,10 @@ class GeminiVoiceIntentClassifier(
     private val apiKeyProvider: () -> String?,
     private val model: String = "gemini-2.5-flash"
 ) {
-    /** The intents a command produced, plus what the one call to extract them cost. */
-    data class Classification(
-        val intents: List<VoiceCommandIntent>,
-        /** Null when the response carried no `usageMetadata` — reporting then degrades to silent. */
-        val usage: TokenUsage?
-    )
-
     suspend fun classify(
         wavAudio: ByteArray,
         projects: List<Project> = emptyList()
-    ): Result<Classification> = runCatching {
+    ): Result<CommandClassification> = runCatching {
         val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() }
             ?: error("کلید Gemini تنظیم نشده است؛ آن را در تنظیمات وارد کنید")
         require(wavAudio.isNotEmpty()) { "صدایی برای تحلیل ضبط نشد" }
@@ -74,8 +64,8 @@ class GeminiVoiceIntentClassifier(
             ?.content?.parts?.firstOrNull { !it.text.isNullOrBlank() }?.text
             ?: error("پاسخ خالی از Gemini دریافت شد")
 
-        Classification(
-            intents = parseIntents(sanitize(rawContent))
+        CommandClassification(
+            intents = IntentJson.parseIntents(json, rawContent)
                 .ifEmpty { error("هیچ دستوری از صدا استخراج نشد") },
             usage = response.usageMetadata?.let { usage ->
                 TokenUsage(
@@ -103,22 +93,4 @@ class GeminiVoiceIntentClassifier(
             else -> "خطای Gemini (HTTP ${e.code()})"
         }
     }
-
-    // The prompt asks for a JSON array, but tolerate a bare object too so a slightly
-    // off-spec response still yields a single-intent list instead of failing outright.
-    private fun parseIntents(cleaned: String): List<VoiceCommandIntent> {
-        val element = json.parseToJsonElement(cleaned)
-        return if (element is JsonArray) {
-            json.decodeFromJsonElement(ListSerializer(VoiceCommandIntent.serializer()), element)
-        } else {
-            listOf(json.decodeFromJsonElement(VoiceCommandIntent.serializer(), element))
-        }
-    }
-
-    // Defensive: even with responseMimeType=application/json, strip any stray code fences.
-    private fun sanitize(raw: String): String = raw.trim()
-        .removePrefix("```json")
-        .removePrefix("```")
-        .removeSuffix("```")
-        .trim()
 }

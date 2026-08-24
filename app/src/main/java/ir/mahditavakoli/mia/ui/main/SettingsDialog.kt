@@ -18,9 +18,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 /**
- * Minimal settings surface (all stored encrypted): the Gemini API key used for on-device
- * voice→intent, the OpenRouter API key MIA pushes to each repo's Actions secrets so the CI
- * agent can run, and whether new voice-created tasks are agent-handled by default.
+ * Minimal settings surface (all stored encrypted): the Gemini API key used for voice→intent,
+ * the OpenRouter API key — which now powers both typed commands in the app (`stealth/ox-alpha`)
+ * and the CI agent, as each repo's `OPENROUTER_API_KEY` Actions secret — and whether new tasks
+ * are agent-handled by default.
  */
 @Composable
 fun SettingsDialog(
@@ -55,7 +56,7 @@ fun SettingsDialog(
                     onValueChange = onGeminiApiKeyChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("کلید API جمینای (تشخیص گفتار)") },
+                    label = { Text("کلید API جمینای (دستور صوتی)") },
                     visualTransformation = PasswordVisualTransformation()
                 )
                 TextButton(
@@ -70,7 +71,7 @@ fun SettingsDialog(
                     onValueChange = onOpenRouterApiKeyChange,
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("کلید API اوپن‌روتر (ایجنت)") },
+                    label = { Text("کلید API اوپن‌روتر (دستور متنی و ایجنت)") },
                     visualTransformation = PasswordVisualTransformation()
                 )
                 TextButton(
