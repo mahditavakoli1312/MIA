@@ -30,7 +30,15 @@ data class ChatCompletionRequest(
     val model: String = OX_ALPHA_MODEL,
     val messages: List<ChatMessage>,
     val temperature: Double = 0.0,
-    @SerialName("max_tokens") val maxTokens: Int = 4096,
+    /**
+     * Omitted when null, which lets the provider use the model's own maximum — deliberately the
+     * default. One command can expand into several `add_task` objects, each carrying a full
+     * Persian Markdown brief, and Persian tokenizes expensively: any fixed cap (4096 was one)
+     * stops the model mid-JSON, the answer comes back `finish_reason=length`, and the whole
+     * command fails *after* both calls were already made. The Gemini voice path is uncapped for
+     * the same reason.
+     */
+    @SerialName("max_tokens") val maxTokens: Int? = null,
     @SerialName("response_format") val responseFormat: ResponseFormat? = null
 )
 

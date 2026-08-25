@@ -106,9 +106,11 @@ class OxTextIntentClassifier(
         val choice = response.choices.firstOrNull()
             ?: error("پاسخ خالی از OpenRouter دریافت شد")
         // A truncated answer would parse as broken JSON with a confusing message, so name the
-        // real cause: the model ran into max_tokens mid-sentence.
+        // real cause: the model ran out of output budget mid-sentence. MIA no longer sends a
+        // max_tokens of its own, so reaching this means the model's own ceiling was hit — the
+        // only remedy left is a smaller command.
         check(choice.finishReason != "length") {
-            "پاسخ مدل ناقص ماند (طولانی‌تر از حد مجاز)؛ دستور را کوتاه‌تر بنویسید"
+            "پاسخ مدل ناقص ماند (طولانی‌تر از حد مجاز)؛ دستور را کوتاه‌تر بنویسید یا آن را به چند دستور بشکنید"
         }
         return Completion(content = choice.message.content.trim(), usage = response.usage)
     }
