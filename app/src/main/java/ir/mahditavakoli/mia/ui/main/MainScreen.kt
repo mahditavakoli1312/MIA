@@ -189,11 +189,14 @@ fun MainScreen(
                 agentHandledByDefault = uiState.agentHandledByDefault,
                 geminiApiKey = uiState.geminiApiKey,
                 openRouterApiKey = uiState.openRouterApiKey,
+                openRouterFallbackApiKey = uiState.openRouterFallbackApiKey,
                 onAgentHandledChange = viewModel::onAgentHandledChange,
                 onGeminiApiKeyChange = viewModel::onGeminiApiKeyChange,
                 onSaveGeminiApiKey = viewModel::saveGeminiApiKey,
                 onOpenRouterApiKeyChange = viewModel::onOpenRouterApiKeyChange,
                 onSaveOpenRouterApiKey = viewModel::saveOpenRouterApiKey,
+                onOpenRouterFallbackApiKeyChange = viewModel::onOpenRouterFallbackApiKeyChange,
+                onSaveOpenRouterFallbackApiKey = viewModel::saveOpenRouterFallbackApiKey,
                 onDismiss = { showSettings = false }
             )
         }

@@ -14,7 +14,15 @@ const issueNumber = process.env.ISSUE_NUMBER;
 const issueTitle = process.env.ISSUE_TITLE || "";
 const issueBody = process.env.ISSUE_BODY || "";
 const repo = process.env.REPO; // "owner/name"
-const orKey = process.env.OPENROUTER_API_KEY;
+// The keys this run may spend, primary first. The spare is only ever reached after the one
+// before it reports a limit — free OpenRouter keys are capped per day, and a spent key would
+// otherwise turn every @po/@qc mention into an error comment until the quota resets.
+const orKeys = [
+  process.env.OPENROUTER_API_KEY,
+  process.env.OPENROUTER_API_KEY_FALLBACK,
+]
+  .map((k) => (k || "").trim())
+  .filter((k, i, all) => k && all.indexOf(k) === i);
 const model = process.env.AGENT_MODEL || "stealth/ox-alpha";
 // Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models
 // (e.g. stealth/ox-alpha), which carry no suffix but still bill nothing.
@@ -41,35 +49,46 @@ const ROLES = {
 
 const fmt = (v) => (Number.isFinite(v) ? v : 0).toLocaleString("en-US");
 
-// Ask the model for one role's response via OpenRouter (OpenAI-compatible API).
+// 429 = rate limited for now, 402 = credit exhausted. Both mean "try the other key"; every
+// other status would fail identically on the spare, so it is reported straight away.
+const isOutOfQuota = (status) => status === 429 || status === 402;
+
+// Ask the model for one role's response via OpenRouter (OpenAI-compatible API), walking down
+// `orKeys` for as long as the answer is "you are out of quota".
 // Returns the answer plus what it cost — `usage` is always present in an OpenRouter reply.
 async function askAI(system, userText) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${orKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 800,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: userText },
-      ],
-    }),
-  });
+  let lastError;
+  for (const key of orKeys) {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 800,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: userText },
+        ],
+      }),
+    });
 
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(
+    const data = await res.json();
+    if (res.ok) {
+      return {
+        text: (data.choices?.[0]?.message?.content || "").trim(),
+        usage: data.usage || null,
+      };
+    }
+    lastError = new Error(
       `OpenRouter error ${res.status}: ${JSON.stringify(data).slice(0, 500)}`
     );
+    if (!isOutOfQuota(res.status)) throw lastError;
+    console.warn(`OpenRouter key rate limited (${res.status}) — trying the next key.`);
   }
-  return {
-    text: (data.choices?.[0]?.message?.content || "").trim(),
-    usage: data.usage || null,
-  };
+  throw lastError;
 }
 
 // A per-role line: what this one answer cost, shown small so it doesn't crowd the advice.
@@ -98,10 +117,11 @@ async function postComment(text) {
 }
 
 async function main() {
-  if (!orKey) {
+  if (orKeys.length === 0) {
     await postComment(
       "🔑 The AI role bot could not run: no `OPENROUTER_API_KEY` secret is set. " +
-        "Add it in repo Settings → Secrets and variables → Actions."
+        "Add it in repo Settings → Secrets and variables → Actions (optionally with an " +
+        "`OPENROUTER_API_KEY_FALLBACK` second key for when the first one is rate limited)."
     );
     process.exit(1);
   }

@@ -37,6 +37,8 @@ jobs:
         env:
           # Reuse the same secret the TEC agent workflow already uses.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional spare key, used only after the primary one answers 429/402.
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           # Same free model as TEC; override with an AGENT_MODEL repo variable.
           # (Raw OpenRouter model id — NO "openrouter/" prefix here.)
           AGENT_MODEL: ${{ vars.AGENT_MODEL || 'stealth/ox-alpha' }}

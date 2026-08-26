@@ -117,10 +117,13 @@ jobs:
         id: agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional spare key. Free-tier OpenRouter keys are capped per day, so without one a
+          # single exhausted key stops TEC outright until the quota resets.
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/stealth/ox-alpha' }}
         run: |
           set -o pipefail
-          if [ -z "$OPENROUTER_API_KEY" ]; then
+          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
             echo "status=nokey" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -140,22 +143,56 @@ jobs:
           format=""
           case "$help" in *--format*) format="--format json" ;; esac
 
-          # Unquoted on purpose: both variables are flag lists that must word-split (or vanish).
-          if opencode run $approve $format -m "$AGENT_MODEL" \
-               "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
-            echo "status=ok" >> "$GITHUB_OUTPUT"
-          elif grep -qiE '429|rate.?limit|quota|exhausted|too many requests|insufficient' "$log"; then
-            echo "status=quota" >> "$GITHUB_OUTPUT"
+          # One attempt on whatever OPENROUTER_API_KEY currently holds.
+          # Exit code: 0 = done, 2 = hit the quota/rate wall, 1 = anything else.
+          run_agent() {
+            # Unquoted on purpose: both variables are flag lists that must word-split (or vanish).
+            if opencode run $approve $format -m "$AGENT_MODEL" \
+                 "$(cat "${RUNNER_TEMP}/agent-prompt.txt")" 2>&1 | tee "$log"; then
+              return 0
+            fi
+            grep -qiE '429|rate.?limit|quota|exhausted|too many requests|insufficient' "$log" && return 2
+            return 1
+          }
+
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            run_agent
+            rc=$?
           else
-            echo "status=error" >> "$GITHUB_OUTPUT"
+            # Only the spare is configured — treat it as if the primary had already run dry.
+            rc=2
           fi
+
+          # A spent key is worth exactly one retry: same prompt, same model, other key.
+          if [ "$rc" = 2 ] && [ -n "$OPENROUTER_API_KEY_FALLBACK" ] \
+             && [ "$OPENROUTER_API_KEY_FALLBACK" != "$OPENROUTER_API_KEY" ]; then
+            echo "::notice::OPENROUTER_API_KEY is rate limited — retrying with OPENROUTER_API_KEY_FALLBACK."
+            export OPENROUTER_API_KEY="$OPENROUTER_API_KEY_FALLBACK"
+            echo "used_fallback=true" >> "$GITHUB_OUTPUT"
+            run_agent
+            rc=$?
+          fi
+
+          case "$rc" in
+            0) echo "status=ok" >> "$GITHUB_OUTPUT" ;;
+            2) echo "status=quota" >> "$GITHUB_OUTPUT" ;;
+            *) echo "status=error" >> "$GITHUB_OUTPUT" ;;
+          esac
 
       - name: Read OpenRouter credits (after)
         id: credits_after
         if: steps.agent.outputs.status != 'nokey'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          USED_FALLBACK: ${{ steps.agent.outputs.used_fallback }}
         run: |
+          # The delta only means something against the same account. When the run failed over to
+          # the spare key the two samples come from different ledgers, so report nothing rather
+          # than a fabricated number — token-usage.js reads an empty value as "unknown".
+          if [ "$USED_FALLBACK" = "true" ]; then
+            echo "usage=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           body="$(curl -sS -m 20 -H "Authorization: Bearer $OPENROUTER_API_KEY" \
             https://openrouter.ai/api/v1/key 2>/dev/null || true)"
           usage="$(node -e 'try{process.stdout.write(String(JSON.parse(process.argv[1]).data.usage))}catch{}' "$body" || true)"
@@ -188,7 +225,7 @@ jobs:
       - name: Report missing OpenRouter key
         if: steps.agent.outputs.status == 'nokey'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
           exit 1
 
       # Free-tier rate/quota exhaustion is expected, not a bug: comment and pass green so the
@@ -196,7 +233,7 @@ jobs:
       - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429).\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit), and stealth models such as `stealth/ox-alpha` at whatever their provider allows. Wait for the limit to reset, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit), and stealth models such as `stealth/ox-alpha` at whatever their provider allows. Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'

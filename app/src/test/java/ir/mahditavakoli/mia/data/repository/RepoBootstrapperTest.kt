@@ -108,6 +108,57 @@ class RepoBootstrapperTest {
     }
 
     @Test
+    fun `fallback key is stored as its own secret alongside the primary`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        val result = bootstrapper(api).bootstrap(
+            owner = "octocat",
+            name = "r",
+            description = null,
+            private = true,
+            agentApiKey = "primary",
+            agentFallbackApiKey = "spare"
+        )
+
+        assertTrue("no warnings expected: ${result.warnings}", result.warnings.isEmpty())
+        val stored = api.putSecrets.associate { (name, body) -> name to body.encryptedValue }
+        assertEquals(
+            setOf(RepoBootstrapper.SECRET_NAME, RepoBootstrapper.FALLBACK_SECRET_NAME),
+            stored.keys
+        )
+        assertEquals("sealed(primary|${api.publicKey.key})", stored[RepoBootstrapper.SECRET_NAME])
+        assertEquals("sealed(spare|${api.publicKey.key})", stored[RepoBootstrapper.FALLBACK_SECRET_NAME])
+    }
+
+    @Test
+    fun `a fallback identical to the primary is not stored twice`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        bootstrapper(api).bootstrap("octocat", "r", null, true, "same-key", "same-key")
+
+        assertEquals(listOf(RepoBootstrapper.SECRET_NAME), api.putSecrets.map { it.first })
+    }
+
+    @Test
+    fun `a failed fallback secret warns but leaves the primary in place`() = runBlocking {
+        val api = FakeGitHubApi().apply {
+            putSecretResponse = { name ->
+                if (name == RepoBootstrapper.FALLBACK_SECRET_NAME) FakeGitHubApi.error(500)
+                else Response.success(Unit)
+            }
+        }
+
+        val result = bootstrapper(api).bootstrap("octocat", "r", null, true, "primary", "spare")
+
+        assertTrue(
+            "the fallback failure must be named: ${result.warnings}",
+            result.warnings.any { it.contains(RepoBootstrapper.FALLBACK_SECRET_NAME) }
+        )
+        // The primary still went in — a broken spare is not worth losing the working key over.
+        assertTrue(api.putSecrets.any { it.first == RepoBootstrapper.SECRET_NAME })
+    }
+
+    @Test
     fun `file upload failure is reported as a warning but does not throw`() = runBlocking {
         val api = FakeGitHubApi().apply { putContentResponse = { FakeGitHubApi.error(500) } }
 

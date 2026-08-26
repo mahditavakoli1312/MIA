@@ -43,7 +43,9 @@ data class MainUiState(
     /** What the user last saved as the Gemini API key (empty if none / using build default). */
     val geminiApiKey: String = "",
     /** What the user last saved as the OpenRouter API key (empty if none). */
-    val openRouterApiKey: String = ""
+    val openRouterApiKey: String = "",
+    /** The spare OpenRouter key, used only once the primary one is rate limited/out of credit. */
+    val openRouterFallbackApiKey: String = ""
 ) {
     /** True while any command is in flight — both front doors stay disabled until it lands. */
     val isBusy: Boolean get() = recordingState is RecordingState.Processing

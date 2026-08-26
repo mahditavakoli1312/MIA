@@ -37,7 +37,8 @@ class GitHubRepository(
             name = repoNameFor(projectName),
             description = "Project «$projectName» — managed by MIA",
             private = createPrivate,
-            agentApiKey = secretStore.agentApiKey
+            agentApiKey = secretStore.agentApiKey,
+            agentFallbackApiKey = secretStore.agentFallbackApiKey
         )
     }
 

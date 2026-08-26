@@ -547,7 +547,7 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 - کلیدهای Gemini و OpenRouter در `EncryptedSharedPreferences` **رمزنگاری‌شده** ذخیره می‌شوند.
 
 **کلیدهای زمان‌ساخت** (از `local.properties` یا متغیرهای محیطی، به `BuildConfig` تزریق می‌شوند):
-`GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
+`GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
 
 ---
 
@@ -636,6 +636,7 @@ SUPABASE_ANON_KEY=<anon-key>
 GITHUB_TOKEN=<token با دسترسی repo + workflow>
 GEMINI_API_KEY=<کلید Gemini برای تشخیص گفتار؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
 OPENROUTER_API_KEY=<کلید رایگان OpenRouter برای ایجنت CI؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
+OPENROUTER_FALLBACK_API_KEY=<کلید دوم OpenRouter؛ فقط وقتی کلید اصلی به محدودیت ۴۲۹ یا اتمام اعتبار ۴۰۲ بخورد استفاده می‌شود>
 GAPGPT_API_KEY=<میراثی؛ برای مسیر فعلی لازم نیست>
 ```
 

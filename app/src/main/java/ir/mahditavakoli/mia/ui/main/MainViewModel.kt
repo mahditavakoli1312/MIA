@@ -45,7 +45,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val textIntentClassifier = OxTextIntentClassifier(
         api = NetworkModule.openRouterApi,
         json = NetworkModule.json,
-        apiKeyProvider = { secretStore.agentApiKey }
+        apiKeyProvider = { secretStore.agentApiKey },
+        fallbackApiKeyProvider = { secretStore.agentFallbackApiKey }
     )
     private val gitHubRepository = GitHubRepository(
         api = NetworkModule.gitHubApi,
@@ -60,7 +61,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         MainUiState(
             agentHandledByDefault = secretStore.agentHandledByDefault,
             geminiApiKey = secretStore.geminiApiKeyOverride,
-            openRouterApiKey = secretStore.agentApiKeyOverride
+            openRouterApiKey = secretStore.agentApiKeyOverride,
+            openRouterFallbackApiKey = secretStore.agentFallbackApiKeyOverride
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -106,6 +108,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveOpenRouterApiKey() {
         secretStore.saveAgentApiKey(_uiState.value.openRouterApiKey)
         emitEvent("کلید OpenRouter ذخیره شد")
+    }
+
+    fun onOpenRouterFallbackApiKeyChange(value: String) {
+        _uiState.update { it.copy(openRouterFallbackApiKey = value) }
+    }
+
+    /**
+     * Persist the spare OpenRouter key. It is never used until the primary one reports a limit
+     * (429 / 402) — in the app's typed-command pipeline, and in each repo as the
+     * `OPENROUTER_API_KEY_FALLBACK` Actions secret the AI-team workflows fall back to.
+     */
+    fun saveOpenRouterFallbackApiKey() {
+        secretStore.saveAgentFallbackApiKey(_uiState.value.openRouterFallbackApiKey)
+        emitEvent("کلید پشتیبان OpenRouter ذخیره شد")
     }
 
     // Warn when the GitHub token can't push workflow files (missing `workflow` scope).
