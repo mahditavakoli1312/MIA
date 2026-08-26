@@ -9,6 +9,7 @@ import ir.mahditavakoli.mia.network.openrouter.OX_ALPHA_MODEL
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterUsage
 import ir.mahditavakoli.mia.network.openrouter.PromptRefinementPrompt
+import ir.mahditavakoli.mia.network.openrouter.Reasoning
 import ir.mahditavakoli.mia.network.openrouter.ResponseFormat
 import ir.mahditavakoli.mia.network.openrouter.TextIntentPrompt
 import ir.mahditavakoli.mia.text.PersianText
@@ -29,6 +30,11 @@ import retrofit2.HttpException
  *  3. **Intent extraction** ([TextIntentPrompt]) — a second call that only has to emit strict
  *     JSON, from input that is already unambiguous.
  *
+ * Both calls run at [Reasoning.MAX] — `ox-alpha`'s highest thinking effort — because both are
+ * hard for a model that answers off the cuff: stage 2 has to guess which of the user's projects
+ * an elliptical Persian sentence meant, and stage 3 has to hold a whole multi-task brief in
+ * strict JSON. The tokens are free on this model, and thinking is what buys the accuracy.
+ *
  * Both calls are billed, so their usage is summed into one [TokenUsage] and reported as a single
  * spend for the command — matching how the voice path reports its one multimodal call.
  *
@@ -46,7 +52,12 @@ class OxTextIntentClassifier(
      * primary one answers with a limit — see [KeyRing].
      */
     private val fallbackApiKeyProvider: () -> String? = { null },
-    private val model: String = OX_ALPHA_MODEL
+    private val model: String = OX_ALPHA_MODEL,
+    /**
+     * How hard the model may think, sent on both calls. [Reasoning.MAX] is `ox-alpha`'s top
+     * setting; a caller pointing [model] at a non-reasoning model should pass null.
+     */
+    private val reasoning: Reasoning? = Reasoning.MAX
 ) {
 
     /**
@@ -102,6 +113,7 @@ class OxTextIntentClassifier(
             request = ChatCompletionRequest(
                 model = model,
                 messages = listOf(ChatMessage.system(system), ChatMessage.user(user)),
+                reasoning = reasoning,
                 // Only the extraction step asks for structured output; a model that ignores
                 // the hint is still handled by IntentJson's fence/prose stripping.
                 responseFormat = if (asJson) ResponseFormat() else null
@@ -112,8 +124,9 @@ class OxTextIntentClassifier(
             ?: error("پاسخ خالی از OpenRouter دریافت شد")
         // A truncated answer would parse as broken JSON with a confusing message, so name the
         // real cause: the model ran out of output budget mid-sentence. MIA no longer sends a
-        // max_tokens of its own, so reaching this means the model's own ceiling was hit — the
-        // only remedy left is a smaller command.
+        // max_tokens of its own, so reaching this means the model's own ceiling was hit — with
+        // full-effort thinking taking its share of it — and the only remedy left is a smaller
+        // command.
         check(choice.finishReason != "length") {
             "پاسخ مدل ناقص ماند (طولانی‌تر از حد مجاز)؛ دستور را کوتاه‌تر بنویسید یا آن را به چند دستور بشکنید"
         }
@@ -128,14 +141,14 @@ class OxTextIntentClassifier(
         val reported = usages.filterNotNull().ifEmpty { return null }
         val prompt = reported.sumOf { it.promptTokens }
         val completion = reported.sumOf { it.completionTokens }
-        val reasoning = reported.sumOf { it.reasoningTokens }
+        val reasoningTokens = reported.sumOf { it.reasoningTokens }
         return TokenUsage(
             model = model,
             promptTokens = prompt,
             // OpenRouter counts reasoning tokens inside completion_tokens; TokenUsage reports
             // them separately and sums the two, so subtract them out here to avoid double-count.
-            outputTokens = (completion - reasoning).coerceAtLeast(0),
-            reasoningTokens = reasoning,
+            outputTokens = (completion - reasoningTokens).coerceAtLeast(0),
+            reasoningTokens = reasoningTokens,
             // Prefer the provider's own totals, falling back to the sum when it reported none.
             totalTokens = reported.sumOf { it.totalTokens }.takeIf { it > 0 }
                 ?: (prompt + completion)

@@ -67,7 +67,15 @@ async function askAI(system, userText) {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 800,
+        // Full thinking effort — "max" is the top setting ox-alpha accepts (its levels are
+        // max/high/low, and reasoning can't be switched off). It is also the model's current
+        // default, sent explicitly so a change to that default can't quietly downgrade reviews.
+        // OpenRouter drops the field for models that don't reason, so an AGENT_MODEL override
+        // still works.
+        reasoning: { effort: "max", exclude: true },
+        // No max_tokens on purpose. An effort level is a *share* of the output budget — "max"
+        // is ~95% of it — so the old 800-token cap would have left the reply about 40 tokens
+        // to be written in. Brevity is asked for in the role prompts instead.
         messages: [
           { role: "system", content: system },
           { role: "user", content: userText },

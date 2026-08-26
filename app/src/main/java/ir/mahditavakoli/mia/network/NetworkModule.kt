@@ -169,13 +169,16 @@ object NetworkModule {
             .client(
                 OkHttpClient.Builder()
                     // Uncapped output (see ChatCompletionRequest.maxTokens) means one intent
-                    // extraction can spend a minute writing Markdown briefs for several tasks.
-                    // OkHttp's 10s default read timeout kills that mid-answer, so the command
-                    // fails with a SocketTimeoutException after the model already did the work.
+                    // extraction can spend minutes thinking at full reasoning effort (see
+                    // ChatCompletionRequest.reasoning) and then writing Markdown briefs for
+                    // several tasks. OkHttp's 10s default read timeout kills that mid-answer,
+                    // so the command fails with a SocketTimeoutException after the model
+                    // already did the work — and a timeout is the one failure that costs the
+                    // user the whole wait and gives nothing back.
                     .connectTimeout(30, TimeUnit.SECONDS)
                     .writeTimeout(60, TimeUnit.SECONDS)
-                    .readTimeout(3, TimeUnit.MINUTES)
-                    .callTimeout(4, TimeUnit.MINUTES)
+                    .readTimeout(5, TimeUnit.MINUTES)
+                    .callTimeout(6, TimeUnit.MINUTES)
                     .addInterceptor(openRouterAttributionInterceptor)
                     .addInterceptor(loggingInterceptor)
                     .addInterceptor(chuckerInterceptor)

@@ -6,6 +6,7 @@ import ir.mahditavakoli.mia.network.openrouter.ChatCompletionResponse
 import ir.mahditavakoli.mia.network.openrouter.ChatMessage
 import ir.mahditavakoli.mia.network.openrouter.Choice
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
+import ir.mahditavakoli.mia.network.openrouter.Reasoning
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -27,9 +28,13 @@ class OxTextIntentClassifierTest {
         """[{"action_type":"create_project","project_name":"وبسایت","task_title":null,""" +
             """"task_description":null,"due_date":null}]"""
 
-    /** Answers each call from [script] in order, recording the bearer token it was given. */
+    /**
+     * Answers each call from [script] in order, recording the bearer token and the request it
+     * was given.
+     */
     private class FakeOpenRouterApi(private val script: List<Result<String>>) : OpenRouterApi {
         val tokensUsed = mutableListOf<String>()
+        val requests = mutableListOf<ChatCompletionRequest>()
         private var call = 0
 
         override suspend fun chatCompletion(
@@ -37,6 +42,7 @@ class OxTextIntentClassifierTest {
             request: ChatCompletionRequest
         ): ChatCompletionResponse {
             tokensUsed += bearerToken
+            requests += request
             val answer = script[call++].getOrElse { throw it }
             return ChatCompletionResponse(
                 choices = listOf(
@@ -127,5 +133,35 @@ class OxTextIntentClassifierTest {
 
         assertTrue(result.isFailure)
         assertEquals(listOf("Bearer primary"), api.tokensUsed)
+    }
+
+    @Test
+    fun `both calls ask for the model's highest reasoning effort`() = runBlocking {
+        val api = FakeOpenRouterApi(
+            listOf(Result.success("یک پروژه به اسم وبسایت بساز"), Result.success(intentJson))
+        )
+
+        assertTrue(classifier(api).classify("یه پروژه وبسایت بساز").isSuccess)
+
+        // Refinement and extraction alike: "max" is the top effort ox-alpha accepts, and the
+        // trace stays on the server because only message.content is ever read.
+        assertEquals(2, api.requests.size)
+        api.requests.forEach { assertEquals(Reasoning(effort = "max", exclude = true), it.reasoning) }
+    }
+
+    /**
+     * The effort only counts if it survives serialization: the request is sent by a Retrofit
+     * converter configured exactly like this, and `encodeDefaults` is what puts a defaulted
+     * field on the wire at all.
+     */
+    @Test
+    fun `the reasoning block is serialized onto the wire`() {
+        val wire = Json { encodeDefaults = true; explicitNulls = false }
+            .encodeToString(
+                ChatCompletionRequest.serializer(),
+                ChatCompletionRequest(messages = emptyList())
+            )
+
+        assertTrue(wire, wire.contains(""""reasoning":{"effort":"max","exclude":true}"""))
     }
 }
