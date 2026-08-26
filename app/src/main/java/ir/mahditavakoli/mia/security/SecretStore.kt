@@ -54,6 +54,24 @@ class SecretStore(context: Context) {
         prefs.edit().putString(KEY_OPENROUTER, value.trim()).apply()
     }
 
+    /**
+     * A second OpenRouter key, only reached once the primary one answers with a limit (HTTP 429
+     * rate limit, or 402 out of credit). Free-tier keys are capped per day, so one spent key
+     * would otherwise stop typed commands and the CI agent outright until the quota resets.
+     * Runtime override first, then the build default, else null (no fallback configured).
+     */
+    val agentFallbackApiKey: String?
+        get() = prefs.getString(KEY_OPENROUTER_FALLBACK, null)?.takeIf { it.isNotBlank() }
+            ?: BuildConfig.OPENROUTER_FALLBACK_API_KEY.takeIf { it.isNotBlank() }
+
+    /** What the user last typed in Settings (without the BuildConfig fallback), for the field. */
+    val agentFallbackApiKeyOverride: String
+        get() = prefs.getString(KEY_OPENROUTER_FALLBACK, "").orEmpty()
+
+    fun saveAgentFallbackApiKey(value: String) {
+        prefs.edit().putString(KEY_OPENROUTER_FALLBACK, value.trim()).apply()
+    }
+
     /** Whether newly created tasks are handed to the agent (labeled "by-agent") by default. */
     var agentHandledByDefault: Boolean
         get() = prefs.getBoolean(KEY_AGENT_DEFAULT, true)
@@ -65,6 +83,7 @@ class SecretStore(context: Context) {
         const val PREFS_NAME = "mia_secrets"
         const val KEY_GEMINI = "gemini_api_key"
         const val KEY_OPENROUTER = "openrouter_api_key"
+        const val KEY_OPENROUTER_FALLBACK = "openrouter_fallback_api_key"
         const val KEY_AGENT_DEFAULT = "agent_handled_by_default"
     }
 }

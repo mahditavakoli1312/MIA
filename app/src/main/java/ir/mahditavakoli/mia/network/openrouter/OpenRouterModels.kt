@@ -6,6 +6,19 @@ import kotlinx.serialization.Serializable
 /** The default text model for MIA's typed commands: OpenRouter's free `ox-alpha` stealth model. */
 const val OX_ALPHA_MODEL = "stealth/ox-alpha"
 
+/**
+ * The strongest thinking budget `ox-alpha` accepts. OpenRouter publishes the model's own
+ * `supported_efforts` as `["max", "high", "low"]` (no "xhigh"/"none"), with reasoning
+ * *mandatory* — it cannot be turned off — so "max" is the ceiling, roughly 95% of the output
+ * budget spent thinking before the answer starts.
+ *
+ * "max" also happens to be the model's current default, which is exactly why MIA sends it
+ * explicitly: a stealth model is re-pointed at new weights without notice, and the day its
+ * default drops to "high" the intent pipeline would quietly get worse with nothing to show for
+ * it in the request.
+ */
+const val MAX_REASONING_EFFORT = "max"
+
 @Serializable
 data class ChatMessage(
     val role: String,
@@ -30,9 +43,42 @@ data class ChatCompletionRequest(
     val model: String = OX_ALPHA_MODEL,
     val messages: List<ChatMessage>,
     val temperature: Double = 0.0,
-    @SerialName("max_tokens") val maxTokens: Int = 4096,
+    /**
+     * Omitted when null, which lets the provider use the model's own maximum — deliberately the
+     * default. One command can expand into several `add_task` objects, each carrying a full
+     * Persian Markdown brief, and Persian tokenizes expensively: any fixed cap (4096 was one)
+     * stops the model mid-JSON, the answer comes back `finish_reason=length`, and the whole
+     * command fails *after* both calls were already made. The Gemini voice path is uncapped for
+     * the same reason.
+     */
+    @SerialName("max_tokens") val maxTokens: Int? = null,
+    /**
+     * Sent on every call, always at full effort — see [Reasoning] and [MAX_REASONING_EFFORT].
+     * Null omits the block entirely, which is what a non-reasoning model would need.
+     */
+    val reasoning: Reasoning? = Reasoning.MAX,
     @SerialName("response_format") val responseFormat: ResponseFormat? = null
 )
+
+/**
+ * OpenRouter's `reasoning` block: how much the model may think before answering.
+ *
+ * [exclude] keeps the thinking out of the reply. MIA never shows a chain of thought — both
+ * stages only read `message.content` — and at [MAX_REASONING_EFFORT] the trace is by far the
+ * largest part of the response, so dropping it server-side saves the phone downloading and
+ * parsing tens of thousands of tokens it would throw away. The tokens are still *billed* and
+ * still reported under `completion_tokens_details`, so the spend shown to the user is unchanged.
+ */
+@Serializable
+data class Reasoning(
+    val effort: String = MAX_REASONING_EFFORT,
+    val exclude: Boolean = true
+) {
+    companion object {
+        /** Full power: the model's top effort, with the trace itself left on the server. */
+        val MAX = Reasoning()
+    }
+}
 
 /** `{"type":"json_object"}` — the OpenAI-compatible way to ask for a bare JSON body. */
 @Serializable

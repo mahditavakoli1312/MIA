@@ -7,6 +7,7 @@ import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubRepo
 import ir.mahditavakoli.mia.network.github.PutContentBody
 import ir.mahditavakoli.mia.network.github.PutSecretBody
+import ir.mahditavakoli.mia.network.github.RepoPublicKey
 
 /** Turns bytes into a base64 string. Abstracted so unit tests avoid `android.util.Base64`. */
 fun interface Base64Encoder {
@@ -33,7 +34,8 @@ data class BootstrapFile(val repoPath: String, val content: String)
  *      already carries them),
  *   3. creates the `by-agent` / `done` labels,
  *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
- *      (the single free-model key that powers CI + PO + TEC + QC).
+ *      (the single free-model key that powers CI + PO + TEC + QC), plus the spare key as
+ *      `OPENROUTER_API_KEY_FALLBACK` for the workflows to switch to on a 429.
  *
  * Repo creation is the only hard-failure step; everything after it is best-effort and
  * reported as [Result.warnings] so a half-wired repo still surfaces useful feedback
@@ -54,13 +56,16 @@ class RepoBootstrapper(
      * @param owner the authenticated user (repo owner / secrets scope).
      * @param agentApiKey the OpenRouter key to store as the Actions secret; when null/blank
      *        the secret step is skipped with a warning (the workflow can't run without it).
+     * @param agentFallbackApiKey the spare OpenRouter key the workflows retry on once the
+     *        primary one is rate limited. Optional — null/blank just means no second attempt.
      */
     suspend fun bootstrap(
         owner: String,
         name: String,
         description: String?,
         private: Boolean,
-        agentApiKey: String?
+        agentApiKey: String?,
+        agentFallbackApiKey: String? = null
     ): Result {
         val useTemplate = templateRepo.isNotBlank()
         val repo = if (useTemplate) {
@@ -102,26 +107,45 @@ class RepoBootstrapper(
             }.onFailure { warnings += "label «$label» failed (${it.message})" }
         }
 
-        // 3. OpenRouter API key secret (used by the OpenCode agent in the workflow).
+        // 3. OpenRouter API key secrets (used by the OpenCode agent in the workflow). Both are
+        // sealed against the same repo public key, so fetch it once and reuse it.
         if (agentApiKey.isNullOrBlank()) {
             warnings += "OPENROUTER_API_KEY not set — add it in Settings so the agent can run"
         } else {
             runCatching {
                 val publicKey = api.getRepoPublicKey(owner, repo.name)
-                val response = api.putActionsSecret(
-                    owner = owner,
-                    repo = repo.name,
-                    name = SECRET_NAME,
-                    body = PutSecretBody(
-                        encryptedValue = encryptor.seal(agentApiKey, publicKey.key),
-                        keyId = publicKey.keyId
-                    )
-                )
-                check(response.isSuccessful) { "HTTP ${response.code()}" }
+                putSecret(owner, repo.name, SECRET_NAME, agentApiKey, publicKey)
+                // Optional: without it the workflows just stop at the first 429, as before.
+                if (!agentFallbackApiKey.isNullOrBlank() && agentFallbackApiKey != agentApiKey) {
+                    runCatching {
+                        putSecret(owner, repo.name, FALLBACK_SECRET_NAME, agentFallbackApiKey, publicKey)
+                    }.onFailure {
+                        warnings += "setting $FALLBACK_SECRET_NAME secret failed (${it.message})"
+                    }
+                }
             }.onFailure { warnings += "setting OPENROUTER_API_KEY secret failed (${it.message})" }
         }
 
         return Result(repo, warnings)
+    }
+
+    private suspend fun putSecret(
+        owner: String,
+        repo: String,
+        name: String,
+        value: String,
+        publicKey: RepoPublicKey
+    ) {
+        val response = api.putActionsSecret(
+            owner = owner,
+            repo = repo,
+            name = name,
+            body = PutSecretBody(
+                encryptedValue = encryptor.seal(value, publicKey.key),
+                keyId = publicKey.keyId
+            )
+        )
+        check(response.isSuccessful) { "HTTP ${response.code()}" }
     }
 
     private fun parseTemplate(value: String): Pair<String, String> {
@@ -141,6 +165,9 @@ class RepoBootstrapper(
         const val MIA_TEMPLATE_REPO = ""
 
         const val SECRET_NAME = "OPENROUTER_API_KEY"
+
+        /** The spare key the AI-team workflows retry with when [SECRET_NAME] hits a 429. */
+        const val FALLBACK_SECRET_NAME = "OPENROUTER_API_KEY_FALLBACK"
 
         /** GitHub label colors are 6-digit hex without a leading '#'. */
         val LABELS = listOf(

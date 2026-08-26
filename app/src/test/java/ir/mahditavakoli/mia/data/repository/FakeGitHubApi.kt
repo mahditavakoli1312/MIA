@@ -35,11 +35,14 @@ class FakeGitHubApi : GitHubApi {
     val createdLabels = mutableListOf<CreateLabelBody>()
     var putSecretName: String? = null
     var putSecretBody: PutSecretBody? = null
+    /** Every secret written, in order — the bootstrapper may store more than one. */
+    val putSecrets = mutableListOf<Pair<String, PutSecretBody>>()
 
     // Response controls (default: everything succeeds).
     var putContentResponse: () -> Response<Unit> = { Response.success(Unit) }
     var labelResponse: (CreateLabelBody) -> Response<Unit> = { Response.success(Unit) }
-    var putSecretResponse: () -> Response<Unit> = { Response.success(Unit) }
+    /** Keyed by secret name, so a test can fail one secret and let the other through. */
+    var putSecretResponse: (String) -> Response<Unit> = { Response.success(Unit) }
 
     private fun repo() = GitHubRepo(
         name = repoName,
@@ -97,7 +100,8 @@ class FakeGitHubApi : GitHubApi {
     ): Response<Unit> {
         putSecretName = name
         putSecretBody = body
-        return putSecretResponse()
+        putSecrets += name to body
+        return putSecretResponse(name)
     }
 
     companion object {

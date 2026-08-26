@@ -38,6 +38,13 @@ android {
         // commands (stealth/ox-alpha) and the CI issue agent (pushed to each repo as the
         // OPENROUTER_API_KEY Actions secret); the runtime override from Settings wins.
         buildConfigField("String", "OPENROUTER_API_KEY", "\"${secret("OPENROUTER_API_KEY")}\"")
+        // Optional second OpenRouter key. Nothing routes to it until the primary one reports a
+        // limit (HTTP 429 rate limit / 402 out of credit); see OxTextIntentClassifier.
+        buildConfigField(
+            "String",
+            "OPENROUTER_FALLBACK_API_KEY",
+            "\"${secret("OPENROUTER_FALLBACK_API_KEY")}\""
+        )
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
     }

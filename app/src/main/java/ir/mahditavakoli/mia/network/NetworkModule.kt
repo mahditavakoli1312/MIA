@@ -22,6 +22,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.Retrofit
 import retrofit2.create
+import java.util.concurrent.TimeUnit
 
 /** Manual, lightweight DI — no framework needed for an app this size. */
 object NetworkModule {
@@ -105,6 +106,10 @@ object NetworkModule {
     private val chuckerInterceptor by lazy { ChuckerInterceptor.Builder(appContext).build() }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
+        // BODY logging otherwise prints every request header verbatim, which puts the live
+        // OpenRouter/Gemini/GitHub/Supabase keys into logcat in plain text.
+        redactHeader("Authorization")
+        redactHeader("apikey")
         level = if (BuildConfig.DEBUG) {
             HttpLoggingInterceptor.Level.BODY
         } else {
@@ -163,6 +168,17 @@ object NetworkModule {
             .baseUrl("https://openrouter.ai/api/")
             .client(
                 OkHttpClient.Builder()
+                    // Uncapped output (see ChatCompletionRequest.maxTokens) means one intent
+                    // extraction can spend minutes thinking at full reasoning effort (see
+                    // ChatCompletionRequest.reasoning) and then writing Markdown briefs for
+                    // several tasks. OkHttp's 10s default read timeout kills that mid-answer,
+                    // so the command fails with a SocketTimeoutException after the model
+                    // already did the work — and a timeout is the one failure that costs the
+                    // user the whole wait and gives nothing back.
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .writeTimeout(60, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.MINUTES)
+                    .callTimeout(6, TimeUnit.MINUTES)
                     .addInterceptor(openRouterAttributionInterceptor)
                     .addInterceptor(loggingInterceptor)
                     .addInterceptor(chuckerInterceptor)
