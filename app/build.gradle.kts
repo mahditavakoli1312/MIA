@@ -1,4 +1,3 @@
-import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -8,14 +7,11 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-val localProperties = Properties().apply {
-    val localPropsFile = rootProject.file("local.properties")
-    if (localPropsFile.exists()) {
-        localPropsFile.inputStream().use { load(it) }
-    }
-}
-
-fun secret(key: String): String = (localProperties.getProperty(key) ?: System.getenv(key) ?: "")
+// Resolution order, highest first: local.properties > env var > the committed,
+// encrypted secrets.enc > the committed, public-by-design secrets.public.properties.
+// Defined in gradle/secrets.gradle.kts, which the root build applies.
+@Suppress("UNCHECKED_CAST")
+val secret = rootProject.extra["miaSecret"] as (String) -> String
 
 android {
     namespace = "ir.mahditavakoli.mia"

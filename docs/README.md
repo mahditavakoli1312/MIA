@@ -546,7 +546,7 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 - نشست کاربر (توکن Supabase) در `SharedPreferences` **معمولی** ذخیره می‌شود.
 - کلیدهای Gemini و OpenRouter در `EncryptedSharedPreferences` **رمزنگاری‌شده** ذخیره می‌شوند.
 
-**کلیدهای زمان‌ساخت** (از `local.properties` یا متغیرهای محیطی، به `BuildConfig` تزریق می‌شوند):
+**کلیدهای زمان‌ساخت** (به `BuildConfig` تزریق می‌شوند؛ منبع و ترتیب اولویت در بخش ۹):
 `GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
 
 ---
@@ -626,21 +626,56 @@ data class TokenUsage(
 
 ## ۹. پیکربندی و راه‌اندازی
 
-برای اجرای پروژه، این کلیدها باید در `local.properties` (یا متغیرهای محیطی) تنظیم شوند:
+کلیدهای زمان‌ساخت **داخل خود مخزن** نگهداری می‌شوند، پس روی هر کلون تازه لازم نیست دوباره وارد شوند.
+کلیدها بر اساس محرمانه‌بودن به دو دسته تقسیم شده‌اند:
+
+| فایل | وضعیت | محتوا |
+|---|---|---|
+| `secrets.public.properties` | کامیت‌شده، متن ساده | `SUPABASE_URL` و `SUPABASE_ANON_KEY` — این‌ها **ذاتاً عمومی‌اند**؛ کلید publishable سوپابیس برای اجرا داخل کلاینت طراحی شده و دسترسی هر ردیف با RLS محدود می‌شود. |
+| `secrets.enc` | کامیت‌شده، رمزشده | `GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY` — با AES-256-CBC (کلید از PBKDF2-HMAC-SHA256، ۱۰۰٬۰۰۰ تکرار). |
+| `local.properties` | گیت‌ایگنور | فقط `sdk.dir` و بازنویسی‌های اختیاری هر توسعه‌دهنده. |
+
+**عبارت عبور** تنها چیزی است که وارد مخزن نمی‌شود. یک‌بار روی هر ماشین تنظیمش کنید:
 
 <div dir="ltr">
 
-```properties
-SUPABASE_URL=https://<your-project>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
-GITHUB_TOKEN=<token با دسترسی repo + workflow>
-GEMINI_API_KEY=<کلید Gemini برای تشخیص گفتار؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
-OPENROUTER_API_KEY=<کلید رایگان OpenRouter برای ایجنت CI؛ اختیاری — می‌توان از تنظیمات اپ هم وارد کرد>
-OPENROUTER_FALLBACK_API_KEY=<کلید دوم OpenRouter؛ فقط وقتی کلید اصلی به محدودیت ۴۲۹ یا اتمام اعتبار ۴۰۲ بخورد استفاده می‌شود>
-GAPGPT_API_KEY=<میراثی؛ برای مسیر فعلی لازم نیست>
+```bash
+echo 'miaSecretsPassphrase=<passphrase>' >> ~/.gradle/gradle.properties
 ```
 
 </div>
+
+روی CI به‌جای آن متغیر محیطی `MIA_SECRETS_PASSPHRASE` را بدهید. اگر عبارت عبور تنظیم نشده باشد، بیلد
+**نمی‌شکند**: کلیدهای رمزشده خالی می‌مانند، مقادیر عمومی سر جایشان هستند و گریدل یک اخطار می‌دهد.
+
+**ترتیب اولویت** برای هر کلید (از بالاترین): `local.properties` ← متغیر محیطی ← `secrets.enc` ←
+`secrets.public.properties` ← رشتهٔ خالی.
+
+**تسک‌های مدیریت کلیدها** (`gradle/secrets.gradle.kts`):
+
+<div dir="ltr">
+
+```bash
+./gradlew secretsStatus    # هر کلید از کجا می‌آید (مقادیر ماسک‌شده)
+./gradlew secretsDecrypt   # secrets.enc -> secrets.local.properties (گیت‌ایگنور) برای ویرایش
+./gradlew secretsEncrypt   # secrets.local.properties -> secrets.enc، آمادهٔ کامیت
+```
+
+</div>
+
+قالب `secrets.enc` با خود `openssl` سازگار است، پس به این اسکریپت بیلد قفل نیستید:
+
+<div dir="ltr">
+
+```bash
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 -md sha256 -a -in secrets.enc
+```
+
+</div>
+
+> **هشدار:** رمزنگاری فقط از کلیدها *در گیت* محافظت می‌کند. هر مقداری که به `BuildConfig` تزریق شود
+> در APK ساخته‌شده به‌صورت متن ساده وجود دارد و با ابزارهای معمول قابل استخراج است. برای
+> `GITHUB_TOKEN` بهتر است از توکن fine-grained با کمترین دسترسی استفاده کنید.
 
 **سمت Supabase:**
 1. دو جدول `projects` و `tasks` را با ساختار بالا بسازید.

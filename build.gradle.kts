@@ -5,3 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.compose) apply false
     alias(libs.plugins.kotlin.serialization) apply false
 }
+
+// Resolves build-time keys from local.properties / env / secrets.enc /
+// secrets.public.properties, and registers the ./gradlew secrets* tasks.
+apply(from = rootProject.file("gradle/secrets.gradle.kts"))
