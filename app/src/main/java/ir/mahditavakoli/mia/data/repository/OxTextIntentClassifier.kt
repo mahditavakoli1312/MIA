@@ -5,7 +5,7 @@ import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionRequest
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionResponse
 import ir.mahditavakoli.mia.network.openrouter.ChatMessage
-import ir.mahditavakoli.mia.network.openrouter.OX_ALPHA_MODEL
+import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterUsage
 import ir.mahditavakoli.mia.network.openrouter.PromptRefinementPrompt
@@ -18,7 +18,7 @@ import retrofit2.HttpException
 
 /**
  * The typed-command counterpart to [GeminiVoiceIntentClassifier]: text in, the same intent
- * array out, but running on OpenRouter's free `stealth/ox-alpha` model instead of Gemini.
+ * array out, but running on OpenRouter's free `minimax/minimax-m3:free` model instead of Gemini.
  *
  * Three stages, deliberately separated because each is bad at the others' job:
  *  1. [PersianText.normalize] — free, instant, on-device: Persian letter forms, ASCII digits,
@@ -30,7 +30,7 @@ import retrofit2.HttpException
  *  3. **Intent extraction** ([TextIntentPrompt]) — a second call that only has to emit strict
  *     JSON, from input that is already unambiguous.
  *
- * Both calls run at [Reasoning.MAX] — `ox-alpha`'s highest thinking effort — because both are
+ * Both calls run at [Reasoning.MAX] — the highest thinking effort — because both are
  * hard for a model that answers off the cuff: stage 2 has to guess which of the user's projects
  * an elliptical Persian sentence meant, and stage 3 has to hold a whole multi-task brief in
  * strict JSON. The tokens are free on this model, and thinking is what buys the accuracy.
@@ -52,10 +52,10 @@ class OxTextIntentClassifier(
      * primary one answers with a limit — see [KeyRing].
      */
     private val fallbackApiKeyProvider: () -> String? = { null },
-    private val model: String = OX_ALPHA_MODEL,
+    private val model: String = DEFAULT_TEXT_MODEL,
     /**
-     * How hard the model may think, sent on both calls. [Reasoning.MAX] is `ox-alpha`'s top
-     * setting; a caller pointing [model] at a non-reasoning model should pass null.
+     * How hard the model may think, sent on both calls. [Reasoning.MAX] is the top setting;
+     * a caller pointing [model] at a non-reasoning model should pass null.
      */
     private val reasoning: Reasoning? = Reasoning.MAX
 ) {

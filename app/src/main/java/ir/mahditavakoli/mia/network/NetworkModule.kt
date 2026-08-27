@@ -159,7 +159,7 @@ object NetworkModule {
     }
 
     /**
-     * Typed commands: prompt pre-processing then intent extraction on `stealth/ox-alpha`.
+     * Typed commands: prompt pre-processing then intent extraction on `minimax/minimax-m3:free`.
      * The key is not in an interceptor — it is passed per call from [secretStore], so a key the
      * user edits in Settings takes effect immediately instead of on the next app start.
      */

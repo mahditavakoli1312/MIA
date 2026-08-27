@@ -23,9 +23,9 @@ const orKeys = [
 ]
   .map((k) => (k || "").trim())
   .filter((k, i, all) => k && all.indexOf(k) === i);
-const model = process.env.AGENT_MODEL || "stealth/ox-alpha";
-// Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models
-// (e.g. stealth/ox-alpha), which carry no suffix but still bill nothing.
+const model = process.env.AGENT_MODEL || "minimax/minimax-m3:free";
+// Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models,
+// which carry no suffix but still bill nothing.
 const isFreeModel = (id) => id.includes(":free") || id.includes("stealth/");
 const githubToken = process.env.GITHUB_TOKEN;
 
@@ -67,11 +67,9 @@ async function askAI(system, userText) {
       },
       body: JSON.stringify({
         model,
-        // Full thinking effort — "max" is the top setting ox-alpha accepts (its levels are
-        // max/high/low, and reasoning can't be switched off). It is also the model's current
-        // default, sent explicitly so a change to that default can't quietly downgrade reviews.
-        // OpenRouter drops the field for models that don't reason, so an AGENT_MODEL override
-        // still works.
+        // Full thinking effort — "max" is the top rung OpenRouter forwards, sent explicitly so
+        // a change to the endpoint's own default can't quietly downgrade reviews. OpenRouter
+        // drops the field for models that don't reason, so an AGENT_MODEL override still works.
         reasoning: { effort: "max", exclude: true },
         // No max_tokens on purpose. An effort level is a *share* of the output budget — "max"
         // is ~95% of it — so the old 800-token cap would have left the reply about 40 tokens

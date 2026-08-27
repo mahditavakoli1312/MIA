@@ -26,8 +26,8 @@ import kotlinx.coroutines.launch
  * Orchestrates both ways a command can reach MIA, which converge as soon as they are intents:
  *
  *  - **Voice:** mic -> recorded audio -> Gemini (multimodal transcription + intent extraction).
- *  - **Text:** typed Persian -> on-device normalization -> OpenRouter `stealth/ox-alpha` prompt
- *    pre-processing -> intent extraction.
+ *  - **Text:** typed Persian -> on-device normalization -> OpenRouter `minimax/minimax-m3:free`
+ *    prompt pre-processing -> intent extraction.
  *
  * From there both run the same path: Supabase execution -> refreshed project list. Plain
  * [AndroidViewModel] — the default Compose `viewModel()` factory wires the Application instance
@@ -103,7 +103,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Persist the OpenRouter API key. One key, two uses: MIA's own typed-command pipeline
-     * (`stealth/ox-alpha`) and the per-repo `OPENROUTER_API_KEY` Actions secret the CI agent runs on.
+     * (`minimax/minimax-m3:free`) and the per-repo `OPENROUTER_API_KEY` Actions secret the CI
+     * agent runs on.
      */
     fun saveOpenRouterApiKey() {
         secretStore.saveAgentApiKey(_uiState.value.openRouterApiKey)

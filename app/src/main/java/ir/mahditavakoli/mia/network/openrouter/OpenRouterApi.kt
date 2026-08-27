@@ -7,7 +7,7 @@ import retrofit2.http.POST
 interface OpenRouterApi {
     /**
      * OpenAI-compatible chat completions, used for MIA's typed-command pipeline (prompt
-     * refinement, then intent extraction) on the free `stealth/ox-alpha` model.
+     * refinement, then intent extraction) on the free `minimax/minimax-m3:free` model.
      *
      * Like [ir.mahditavakoli.mia.network.gemini.GeminiApi], the key is passed per call rather
      * than baked into an interceptor: it is the runtime OpenRouter key from

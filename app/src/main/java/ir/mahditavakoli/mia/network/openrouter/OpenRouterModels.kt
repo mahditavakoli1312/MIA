@@ -3,19 +3,28 @@ package ir.mahditavakoli.mia.network.openrouter
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/** The default text model for MIA's typed commands: OpenRouter's free `ox-alpha` stealth model. */
-const val OX_ALPHA_MODEL = "stealth/ox-alpha"
+/**
+ * The default text model for MIA's typed commands: MiniMax M3 on OpenRouter's free tier.
+ *
+ * It replaced `stealth/ox-alpha`, which OpenRouter withdrew — the risk every stealth model
+ * carries, since an anonymous provider can pull one without notice. `minimax/minimax-m3:free`
+ * is the like-for-like successor: free on both prompt and completion tokens, a 1M-token
+ * context, reasoning, `response_format`, and tool calling (which the CI agent needs). It is
+ * deliberately the same model the CI agents run on, so one migration moves the whole stack.
+ *
+ * Named for the role, not the model, so the next swap is a one-line change here.
+ */
+const val DEFAULT_TEXT_MODEL = "minimax/minimax-m3:free"
 
 /**
- * The strongest thinking budget `ox-alpha` accepts. OpenRouter publishes the model's own
- * `supported_efforts` as `["max", "high", "low"]` (no "xhigh"/"none"), with reasoning
- * *mandatory* — it cannot be turned off — so "max" is the ceiling, roughly 95% of the output
- * budget spent thinking before the answer starts.
+ * The strongest thinking budget MIA asks for. OpenRouter accepts the full effort ladder for
+ * this model, and "none" is the one rung that actually stops it thinking (it reports zero
+ * reasoning tokens; every other level reports hundreds), so "max" is the ceiling.
  *
- * "max" also happens to be the model's current default, which is exactly why MIA sends it
- * explicitly: a stealth model is re-pointed at new weights without notice, and the day its
- * default drops to "high" the intent pipeline would quietly get worse with nothing to show for
- * it in the request.
+ * The model publishes no `supported_efforts` list of its own, which is exactly why MIA sends
+ * the level explicitly rather than trusting the endpoint's default: a free endpoint can change
+ * that default without notice, and the intent pipeline would quietly get worse with nothing to
+ * show for it in the request.
  */
 const val MAX_REASONING_EFFORT = "max"
 
@@ -34,13 +43,13 @@ data class ChatMessage(
  * An OpenAI-compatible chat-completions request, as OpenRouter accepts it.
  *
  * [responseFormat] is nullable and omitted when null (the Retrofit client for OpenRouter
- * serializes with `explicitNulls = false`): the free stealth models do not all implement
- * structured outputs, and a model that rejects the field would fail the whole call — so the
+ * serializes with `explicitNulls = false`): free endpoints do not all implement structured
+ * outputs, and a model that rejects the field would fail the whole call — so the
  * intent step asks for JSON and *also* tolerates a fenced or prose-wrapped answer.
  */
 @Serializable
 data class ChatCompletionRequest(
-    val model: String = OX_ALPHA_MODEL,
+    val model: String = DEFAULT_TEXT_MODEL,
     val messages: List<ChatMessage>,
     val temperature: Double = 0.0,
     /**

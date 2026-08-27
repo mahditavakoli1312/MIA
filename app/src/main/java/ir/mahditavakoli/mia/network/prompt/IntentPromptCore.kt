@@ -11,7 +11,7 @@ import java.util.Locale
  * reached the app: the output schema, the rules, and the worked examples.
  *
  * MIA has two front doors — the mic (Gemini, multimodal, audio in) and the text field
- * (OpenRouter `stealth/ox-alpha`, text in) — and both must produce byte-identical intent JSON,
+ * (OpenRouter `minimax/minimax-m3:free`, text in) — and both must produce byte-identical intent JSON,
  * because a single [ir.mahditavakoli.mia.data.repository.IntentExecutionRepository] executes
  * whatever comes back. Keeping the schema and rules in one place is what guarantees that; only
  * the few modality-specific lines (what the input *is*, and how it is likely to be wrong) are

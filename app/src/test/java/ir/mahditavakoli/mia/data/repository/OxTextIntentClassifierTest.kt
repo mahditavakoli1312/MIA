@@ -143,7 +143,7 @@ class OxTextIntentClassifierTest {
 
         assertTrue(classifier(api).classify("یه پروژه وبسایت بساز").isSuccess)
 
-        // Refinement and extraction alike: "max" is the top effort ox-alpha accepts, and the
+        // Refinement and extraction alike: "max" is the top effort OpenRouter forwards, and the
         // trace stays on the server because only message.content is ever read.
         assertEquals(2, api.requests.size)
         api.requests.forEach { assertEquals(Reasoning(effort = "max", exclude = true), it.reasoning) }
