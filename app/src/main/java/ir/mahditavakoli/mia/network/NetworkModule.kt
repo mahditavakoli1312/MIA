@@ -5,6 +5,7 @@ import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
+import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
@@ -87,6 +88,25 @@ object NetworkModule {
             base64 = AndroidBase64Encoder,
             encryptor = LibsodiumSecretEncryptor,
             files = readBootstrapFiles()
+        )
+    }
+
+    /**
+     * The one GitHub facade the whole app shares — project mirroring, the agent-model picker and
+     * the issues screens all go through it.
+     *
+     * Shared rather than constructed per ViewModel because it caches the authenticated user's
+     * login: a fresh instance per screen would spend an extra `GET /user` before its first real
+     * call, on a rate limit that repo bootstrapping also draws on.
+     */
+    val gitHubRepository: GitHubRepository by lazy {
+        GitHubRepository(
+            api = gitHubApi,
+            isConfigured = isGitHubConfigured,
+            bootstrapper = repoBootstrapper,
+            agentModelMigrator = agentModelMigrator,
+            agentApiKeyProvider = { secretStore.agentApiKey },
+            agentFallbackApiKeyProvider = { secretStore.agentFallbackApiKey }
         )
     }
 

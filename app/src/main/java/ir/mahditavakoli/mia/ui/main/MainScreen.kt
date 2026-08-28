@@ -49,12 +49,18 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ir.mahditavakoli.mia.data.model.Project
 
+/**
+ * @param onOpenIssues opens the GitHub issues of one project — the counts shown on its card are
+ *        the entry point, so this is what the card's issues strip taps into.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     onLogout: () -> Unit = {},
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel = viewModel(),
+    onOpenIssues: (Project) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val amplitude by viewModel.micAmplitude.collectAsState()
@@ -170,7 +176,12 @@ fun MainScreen(
                                 project = project,
                                 modifier = Modifier.padding(bottom = 12.dp),
                                 canChangeAgentModel = uiState.isGitHubConfigured,
-                                onChangeAgentModel = { viewModel.onChangeAgentModelClick(project) }
+                                onChangeAgentModel = { viewModel.onChangeAgentModelClick(project) },
+                                // Null without GitHub configured: no repo, so no issues strip.
+                                issueSummary = uiState.issueSummaries[project.name]
+                                    ?.takeIf { uiState.isGitHubConfigured },
+                                onOpenIssues = { onOpenIssues(project) },
+                                onRetryIssues = { viewModel.refreshIssueSummary(project.name) }
                             )
                         }
                     }

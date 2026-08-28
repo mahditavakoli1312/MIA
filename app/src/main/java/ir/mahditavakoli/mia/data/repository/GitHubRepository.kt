@@ -1,10 +1,15 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.data.model.IssueComment
+import ir.mahditavakoli.mia.data.model.IssueList
+import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.data.model.TokenUsage
+import ir.mahditavakoli.mia.network.github.CreateCommentBody
 import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubIssue
-import ir.mahditavakoli.mia.security.SecretStore
+import ir.mahditavakoli.mia.network.github.GitHubIssueComment
+import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import kotlin.math.absoluteValue
 
 /**
@@ -24,8 +29,16 @@ class GitHubRepository(
     private val api: GitHubApi,
     val isConfigured: Boolean,
     private val bootstrapper: RepoBootstrapper,
-    private val secretStore: SecretStore,
     private val agentModelMigrator: AgentModelMigrator,
+    /**
+     * The OpenRouter keys pushed into each new repo as Actions secrets, read at the moment a
+     * repo is created rather than captured up front — a key the user saves in Settings must
+     * reach the next repo without the app being restarted. Providers rather than the
+     * [ir.mahditavakoli.mia.security.SecretStore] itself so this class stays plain Kotlin,
+     * testable off-device; same shape the intent classifiers already use.
+     */
+    private val agentApiKeyProvider: () -> String?,
+    private val agentFallbackApiKeyProvider: () -> String?,
     private val createPrivate: Boolean = true
 ) {
     // The authenticated user's login, resolved once and reused as the repo/issue owner.
@@ -38,8 +51,8 @@ class GitHubRepository(
             name = repoNameFor(projectName),
             description = "Project «$projectName» — managed by MIA",
             private = createPrivate,
-            agentApiKey = secretStore.agentApiKey,
-            agentFallbackApiKey = secretStore.agentFallbackApiKey
+            agentApiKey = agentApiKeyProvider(),
+            agentFallbackApiKey = agentFallbackApiKeyProvider()
         )
     }
 
@@ -80,6 +93,86 @@ class GitHubRepository(
                 labels = if (agentHandled) listOf(AGENT_LABEL) else null
             )
         )
+    }
+
+    // Reading issues back -----------------------------------------------------
+
+    /**
+     * Every issue in this project's repo — open and closed together, newest first.
+     *
+     * One paged read serves both tabs of the issues screen and the counts on the project card;
+     * splitting it per state would double the requests against a rate limit shared with repo
+     * bootstrapping. Pull requests are dropped: GitHub returns them from the issues endpoint,
+     * but they are not tasks and would inflate every count on the card.
+     *
+     * Paging stops at [ISSUE_PAGE_LIMIT] pages; the result then reports itself truncated rather
+     * than pretending the numbers are totals.
+     */
+    suspend fun issuesFor(projectName: String): Result<IssueList> = runCatching {
+        val owner = owner()
+        val repo = repoNameFor(projectName)
+        val collected = mutableListOf<RepoIssue>()
+        var truncated = false
+        for (page in 1..ISSUE_PAGE_LIMIT) {
+            val batch = api.listIssues(
+                owner = owner,
+                repo = repo,
+                state = "all",
+                perPage = ISSUE_PAGE_SIZE,
+                page = page
+            )
+            collected += batch.filter { it.pullRequest == null }.map { it.toRepoIssue() }
+            if (batch.size < ISSUE_PAGE_SIZE) break
+            // A full last page means GitHub probably has more than we are willing to fetch.
+            if (page == ISSUE_PAGE_LIMIT) truncated = true
+        }
+        IssueList(issues = collected, isTruncated = truncated)
+    }
+
+    /** One issue, re-read from GitHub so the detail screen shows its current state and body. */
+    suspend fun issueFor(projectName: String, number: Int): Result<RepoIssue> = runCatching {
+        api.getIssue(owner(), repoNameFor(projectName), number).toRepoIssue()
+    }
+
+    /**
+     * Comments on one issue, oldest first. Paged the same way as [issuesFor] — an issue the CI
+     * agent has been working on can easily carry dozens of them.
+     */
+    suspend fun issueCommentsFor(projectName: String, number: Int): Result<List<IssueComment>> =
+        runCatching {
+            val owner = owner()
+            val repo = repoNameFor(projectName)
+            val collected = mutableListOf<IssueComment>()
+            for (page in 1..ISSUE_PAGE_LIMIT) {
+                val batch = api.listIssueComments(
+                    owner = owner,
+                    repo = repo,
+                    number = number,
+                    perPage = ISSUE_PAGE_SIZE,
+                    page = page
+                )
+                collected += batch.map { it.toIssueComment() }
+                if (batch.size < ISSUE_PAGE_SIZE) break
+            }
+            collected
+        }
+
+    /**
+     * Posts a comment as the token's own user. Returns the created comment so the screen can
+     * append it without re-reading the whole thread.
+     */
+    suspend fun addIssueComment(
+        projectName: String,
+        number: Int,
+        body: String
+    ): Result<IssueComment> = runCatching {
+        require(body.isNotBlank()) { "متن کامنت خالی است" }
+        api.createIssueComment(
+            owner = owner(),
+            repo = repoNameFor(projectName),
+            number = number,
+            body = CreateCommentBody(body)
+        ).toIssueComment()
     }
 
     /**
@@ -130,6 +223,16 @@ class GitHubRepository(
     companion object {
         const val AGENT_LABEL = "by-agent"
 
+        /** GitHub's maximum page size for list endpoints. */
+        private const val ISSUE_PAGE_SIZE = 100
+
+        /**
+         * How many pages of issues (or comments) MIA will pull. Three pages is far more than a
+         * MIA-managed project realistically has, and bounds the worst case for a repo that was
+         * pointed at something much bigger.
+         */
+        private const val ISSUE_PAGE_LIMIT = 3
+
         /**
          * GitHub repo names may only contain ASCII letters, digits, '.', '-', '_'.
          * Latin project names become a readable slug; names with no usable ASCII
@@ -144,3 +247,24 @@ class GitHubRepository(
         }
     }
 }
+
+private fun GitHubIssueDetail.toRepoIssue(): RepoIssue = RepoIssue(
+    number = number,
+    title = title,
+    body = body,
+    // GitHub only ever sends "open" or "closed"; treat anything unexpected as closed rather
+    // than showing a stale issue as actionable.
+    isOpen = state.equals("open", ignoreCase = true),
+    author = user?.login,
+    createdAt = createdAt,
+    commentCount = comments,
+    labels = labels.map { it.name },
+    htmlUrl = htmlUrl
+)
+
+private fun GitHubIssueComment.toIssueComment(): IssueComment = IssueComment(
+    id = id,
+    author = user?.login,
+    body = body,
+    createdAt = createdAt
+)

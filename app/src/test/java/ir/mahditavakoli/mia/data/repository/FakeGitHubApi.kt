@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.network.github.CreateCommentBody
 import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.CreateLabelBody
 import ir.mahditavakoli.mia.network.github.ContentFile
@@ -7,6 +8,8 @@ import ir.mahditavakoli.mia.network.github.CreateRepoBody
 import ir.mahditavakoli.mia.network.github.GenerateFromTemplateBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubIssue
+import ir.mahditavakoli.mia.network.github.GitHubIssueComment
+import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import ir.mahditavakoli.mia.network.github.GitHubOwner
 import ir.mahditavakoli.mia.network.github.GitHubRepo
 import ir.mahditavakoli.mia.network.github.GitHubUser
@@ -45,6 +48,12 @@ class FakeGitHubApi : GitHubApi {
      */
     val contents = mutableMapOf<String, String>()
 
+    /** Issues this repo "contains", newest first — the order GitHub's list endpoint uses. */
+    val issues = mutableListOf<GitHubIssueDetail>()
+
+    /** Comments this repo holds, keyed by issue number and kept oldest-first. */
+    val issueComments = mutableMapOf<Int, MutableList<GitHubIssueComment>>()
+
     // Response controls (default: everything succeeds).
     var putContentResponse: () -> Response<Unit> = { Response.success(Unit) }
     var labelResponse: (CreateLabelBody) -> Response<Unit> = { Response.success(Unit) }
@@ -81,6 +90,47 @@ class FakeGitHubApi : GitHubApi {
 
     override suspend fun createIssue(owner: String, repo: String, body: CreateIssueBody): GitHubIssue =
         throw UnsupportedOperationException("not used by the bootstrapper")
+
+    override suspend fun listIssues(
+        owner: String,
+        repo: String,
+        state: String,
+        perPage: Int,
+        page: Int
+    ): List<GitHubIssueDetail> {
+        val matching = issues.filter { state == "all" || it.state == state }
+        return matching.drop((page - 1) * perPage).take(perPage)
+    }
+
+    override suspend fun getIssue(owner: String, repo: String, number: Int): GitHubIssueDetail =
+        issues.firstOrNull { it.number == number }
+            ?: throw NoSuchElementException("no issue #$number")
+
+    override suspend fun listIssueComments(
+        owner: String,
+        repo: String,
+        number: Int,
+        perPage: Int,
+        page: Int
+    ): List<GitHubIssueComment> =
+        issueComments[number].orEmpty().drop((page - 1) * perPage).take(perPage)
+
+    override suspend fun createIssueComment(
+        owner: String,
+        repo: String,
+        number: Int,
+        body: CreateCommentBody
+    ): GitHubIssueComment {
+        val thread = issueComments.getOrPut(number) { mutableListOf() }
+        val comment = GitHubIssueComment(
+            id = (thread.size + 1).toLong(),
+            body = body.body,
+            user = GitHubUser(this.owner),
+            createdAt = "2026-01-01T00:00:00Z"
+        )
+        thread += comment
+        return comment
+    }
 
     override suspend fun getContent(owner: String, repo: String, path: String): Response<ContentFile> {
         val text = contents[path] ?: return Response.error(404, "".toResponseBody(null))
