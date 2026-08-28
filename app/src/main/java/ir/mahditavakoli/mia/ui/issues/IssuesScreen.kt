@@ -19,15 +19,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -38,6 +42,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -64,8 +69,12 @@ fun IssuesScreen(
     viewModel: IssuesViewModel = viewModel(key = "issues-$projectName")
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(projectName) { viewModel.load(projectName) }
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { message -> snackbarHostState.showSnackbar(message) }
+    }
 
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         Scaffold(
@@ -105,7 +114,19 @@ fun IssuesScreen(
                     )
                 )
             },
-            containerColor = MaterialTheme.colorScheme.background
+            containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    onClick = viewModel::onNewIssueClick,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(imageVector = Icons.Filled.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("ایشوی جدید")
+                }
+            }
         ) { padding ->
             Column(
                 Modifier
@@ -160,7 +181,8 @@ fun IssuesScreen(
 
                         else -> LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 24.dp)
+                            // Extra bottom room so the "new issue" FAB never covers the last row.
+                            contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.visible, key = { it.number }) { issue ->
                                 IssueRow(issue = issue, onClick = { onOpenIssue(issue.number) })
@@ -181,6 +203,18 @@ fun IssuesScreen(
                     }
                 }
             }
+        }
+
+        uiState.newIssue?.let { form ->
+            NewIssueDialog(
+                state = form,
+                repoName = uiState.repoName,
+                onTitleChange = viewModel::onNewIssueTitleChange,
+                onBodyChange = viewModel::onNewIssueBodyChange,
+                onToggleLabel = viewModel::onToggleLabel,
+                onSubmit = viewModel::submitNewIssue,
+                onDismiss = viewModel::dismissNewIssue
+            )
         }
     }
 }

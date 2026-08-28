@@ -8,6 +8,7 @@ import ir.mahditavakoli.mia.network.github.PullRequestRef
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Base64
@@ -137,6 +138,84 @@ class GitHubRepositoryIssuesTest {
 
         assertTrue(result.isFailure)
         assertTrue("nothing should have been posted", api.issueComments[5].isNullOrEmpty())
+    }
+
+    @Test
+    fun `a new issue is opened with the labels the user picked`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        val created = repository(api).createIssue(
+            projectName = "My Project",
+            title = "  Add a login screen  ",
+            body = "  with Google sign-in  ",
+            labels = listOf(GitHubRepository.AGENT_LABEL, "bug")
+        ).getOrThrow()
+
+        val sent = api.createdIssues.single()
+        // Whitespace the user left around the fields never reaches GitHub.
+        assertEquals("Add a login screen", sent.title)
+        assertEquals("with Google sign-in", sent.body)
+        assertEquals(listOf("by-agent", "bug"), sent.labels)
+        assertTrue("a new issue is open", created.isOpen)
+        assertEquals(listOf("by-agent", "bug"), created.labels)
+    }
+
+    @Test
+    fun `an issue with no labels and no body sends neither`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        repository(api).createIssue("My Project", "Just a title", body = "   ", labels = emptyList())
+
+        val sent = api.createdIssues.single()
+        assertNull("an empty body must not be sent as an empty string", sent.body)
+        assertNull("no labels means the field is omitted", sent.labels)
+    }
+
+    @Test
+    fun `a blank title is rejected before it reaches GitHub`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        val result = repository(api).createIssue("My Project", "   ", body = "x", labels = emptyList())
+
+        assertTrue(result.isFailure)
+        assertTrue("nothing should have been opened", api.createdIssues.isEmpty())
+    }
+
+    @Test
+    fun `the agent label is always offered even when the repo does not define it`() = runBlocking {
+        val api = FakeGitHubApi()
+        api.labels += listOf(GitHubLabel("bug"), GitHubLabel("done"))
+
+        val offered = repository(api).labelsFor("My Project").getOrThrow()
+
+        assertEquals(listOf("by-agent", "bug", "done"), offered)
+    }
+
+    @Test
+    fun `a repo that already defines the agent label is not given a second copy`() = runBlocking {
+        val api = FakeGitHubApi()
+        api.labels += listOf(GitHubLabel("by-agent"), GitHubLabel("done"))
+
+        val offered = repository(api).labelsFor("My Project").getOrThrow()
+
+        assertEquals(listOf("by-agent", "done"), offered)
+    }
+
+    @Test
+    fun `an agent-handled task carries the label that fires the workflow`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        repository(api).createIssueForTask(
+            projectName = "My Project",
+            taskTitle = "Ship it",
+            description = "the brief",
+            dueDate = "2026-09-01",
+            agentHandled = true
+        ).getOrThrow()
+
+        val sent = api.createdIssues.single()
+        assertEquals(listOf("by-agent"), sent.labels)
+        assertTrue("the due date belongs in the body", sent.body.orEmpty().contains("2026-09-01"))
     }
 
     @Test

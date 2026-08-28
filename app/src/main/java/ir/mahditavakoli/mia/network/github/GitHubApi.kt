@@ -43,7 +43,7 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Body body: CreateIssueBody
-    ): GitHubIssue
+    ): GitHubIssueDetail
 
     /**
      * Lists issues, newest first. [state] is "open", "closed" or "all".
@@ -60,6 +60,19 @@ interface GitHubApi {
         @Query("per_page") perPage: Int,
         @Query("page") page: Int
     ): List<GitHubIssueDetail>
+
+    /**
+     * The labels this repo defines — what the "new issue" sheet offers. Every MIA-bootstrapped
+     * repo has at least `by-agent` and `done` (see RepoBootstrapper), but a repo can carry any
+     * labels its owner has added, so the list is read rather than assumed.
+     */
+    @GET("repos/{owner}/{repo}/labels")
+    suspend fun listLabels(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int,
+        @Query("page") page: Int
+    ): List<GitHubLabel>
 
     @GET("repos/{owner}/{repo}/issues/{number}")
     suspend fun getIssue(

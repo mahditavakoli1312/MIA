@@ -7,7 +7,6 @@ import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.network.github.CreateCommentBody
 import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
-import ir.mahditavakoli.mia.network.github.GitHubIssue
 import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import kotlin.math.absoluteValue
@@ -70,7 +69,7 @@ class GitHubRepository(
         agentHandled: Boolean,
         usage: TokenUsage? = null,
         usageSharedBy: Int = 1
-    ): Result<GitHubIssue> = runCatching {
+    ): Result<RepoIssue> = runCatching {
         val owner = owner()
         val body = buildString {
             // Prefer the Gemini-generated description as the issue body (it's the agent's brief);
@@ -92,7 +91,51 @@ class GitHubRepository(
                 // Attaching "by-agent" at open time is what triggers the agent workflow.
                 labels = if (agentHandled) listOf(AGENT_LABEL) else null
             )
-        )
+        ).toRepoIssue()
+    }
+
+    /**
+     * Opens an issue the user wrote themselves, with whichever labels they picked.
+     *
+     * The sibling of [createIssueForTask], which exists to mirror a task MIA just stored in
+     * Supabase. This one writes only to GitHub: there is no task behind it, and the labels are
+     * the user's choice rather than derived from the agent-handled setting. Including
+     * [AGENT_LABEL] here has the same effect as anywhere else — the workflow picks the issue up
+     * as soon as it is opened.
+     */
+    suspend fun createIssue(
+        projectName: String,
+        title: String,
+        body: String?,
+        labels: List<String>
+    ): Result<RepoIssue> = runCatching {
+        require(title.isNotBlank()) { "عنوان ایشو خالی است" }
+        api.createIssue(
+            owner = owner(),
+            repo = repoNameFor(projectName),
+            body = CreateIssueBody(
+                title = title.trim(),
+                body = body?.trim()?.takeIf { it.isNotEmpty() },
+                labels = labels.takeIf { it.isNotEmpty() }
+            )
+        ).toRepoIssue()
+    }
+
+    /**
+     * The label names this project's repo defines, for the "new issue" sheet to offer.
+     *
+     * [AGENT_LABEL] is guaranteed to be in the result even if the repo somehow lacks it: it is
+     * the one label that changes what happens to an issue, and GitHub creates a missing label
+     * on demand when an issue is opened with it, so offering it is always safe.
+     */
+    suspend fun labelsFor(projectName: String): Result<List<String>> = runCatching {
+        val labels = api.listLabels(
+            owner = owner(),
+            repo = repoNameFor(projectName),
+            perPage = ISSUE_PAGE_SIZE,
+            page = 1
+        ).map { it.name }
+        if (labels.contains(AGENT_LABEL)) labels else listOf(AGENT_LABEL) + labels
     }
 
     // Reading issues back -----------------------------------------------------

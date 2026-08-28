@@ -98,12 +98,6 @@ data class PutSecretBody(
     @SerialName("key_id") val keyId: String
 )
 
-@Serializable
-data class GitHubIssue(
-    val number: Int,
-    @SerialName("html_url") val htmlUrl: String
-)
-
 /**
  * One issue as the list/detail endpoints return it.
  *
