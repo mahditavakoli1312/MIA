@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * Thin GitHub REST v3 client. Auth (Authorization / Accept headers) is added
@@ -42,7 +43,61 @@ interface GitHubApi {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Body body: CreateIssueBody
-    ): GitHubIssue
+    ): GitHubIssueDetail
+
+    /**
+     * Lists issues, newest first. [state] is "open", "closed" or "all".
+     *
+     * GitHub returns pull requests from this endpoint too, so callers must drop rows whose
+     * `pull_request` field is set. Paging is explicit (no default arguments — Retrofit sees the
+     * synthetic bridge Kotlin generates for those, not the annotated method).
+     */
+    @GET("repos/{owner}/{repo}/issues")
+    suspend fun listIssues(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("state") state: String,
+        @Query("per_page") perPage: Int,
+        @Query("page") page: Int
+    ): List<GitHubIssueDetail>
+
+    /**
+     * The labels this repo defines — what the "new issue" sheet offers. Every MIA-bootstrapped
+     * repo has at least `by-agent` and `done` (see RepoBootstrapper), but a repo can carry any
+     * labels its owner has added, so the list is read rather than assumed.
+     */
+    @GET("repos/{owner}/{repo}/labels")
+    suspend fun listLabels(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Query("per_page") perPage: Int,
+        @Query("page") page: Int
+    ): List<GitHubLabel>
+
+    @GET("repos/{owner}/{repo}/issues/{number}")
+    suspend fun getIssue(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("number") number: Int
+    ): GitHubIssueDetail
+
+    /** Comments on one issue, oldest first — the order GitHub's own issue page shows. */
+    @GET("repos/{owner}/{repo}/issues/{number}/comments")
+    suspend fun listIssueComments(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("number") number: Int,
+        @Query("per_page") perPage: Int,
+        @Query("page") page: Int
+    ): List<GitHubIssueComment>
+
+    @POST("repos/{owner}/{repo}/issues/{number}/comments")
+    suspend fun createIssueComment(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("number") number: Int,
+        @Body body: CreateCommentBody
+    ): GitHubIssueComment
 
     /**
      * Reads one file. Returns the raw [Response] because "this repo doesn't have that file"

@@ -16,6 +16,7 @@ import ir.mahditavakoli.mia.data.repository.ProjectRepository
 import ir.mahditavakoli.mia.network.NetworkModule
 import ir.mahditavakoli.mia.network.toPersianMessage
 import ir.mahditavakoli.mia.voice.VoiceRecorder
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,13 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         apiKeyProvider = { secretStore.agentApiKey },
         fallbackApiKeyProvider = { secretStore.agentFallbackApiKey }
     )
-    private val gitHubRepository = GitHubRepository(
-        api = NetworkModule.gitHubApi,
-        isConfigured = NetworkModule.isGitHubConfigured,
-        bootstrapper = NetworkModule.repoBootstrapper,
-        secretStore = secretStore,
-        agentModelMigrator = NetworkModule.agentModelMigrator
-    )
+    private val gitHubRepository = NetworkModule.gitHubRepository
     private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi, gitHubRepository)
     private val projectRepository = ProjectRepository(NetworkModule.supabaseApi)
 
@@ -77,6 +72,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // message on rotation/recomposition the way a plain StateFlow field would.
     private val _events = Channel<String>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
+
+    // Cancelled and restarted on every project refresh, so a slow sweep over an old project
+    // list can't keep writing counts for cards that are no longer on screen.
+    private var issueSummaryJob: Job? = null
 
     init {
         refreshProjects()
@@ -316,12 +315,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingProjects = true) }
             projectRepository.getProjects().fold(
-                onSuccess = { projects -> _uiState.update { it.copy(projects = projects, isLoadingProjects = false) } },
+                onSuccess = { projects ->
+                    _uiState.update { it.copy(projects = projects, isLoadingProjects = false) }
+                    loadIssueSummaries(projects)
+                },
                 onFailure = { error ->
                     _uiState.update { it.copy(isLoadingProjects = false) }
                     emitEvent(error.toPersianMessage("خطا در بارگذاری پروژه‌ها"))
                 }
             )
+        }
+    }
+
+    // Issue counts -------------------------------------------------------------
+
+    /**
+     * Fills in each card's open/closed counts from GitHub, one project at a time.
+     *
+     * Sequential on purpose: the counts are a nicety on a list the user can already read, and
+     * firing one request per project at once would spend the shared GitHub rate limit that repo
+     * creation and the model picker also draw on. Each project's answer lands on its own card as
+     * it arrives, and a failure is recorded per card rather than raised as a snackbar — a project
+     * whose repo was never created is an ordinary state here, not an error the user must dismiss.
+     */
+    private fun loadIssueSummaries(projects: List<Project>) {
+        if (!gitHubRepository.isConfigured || projects.isEmpty()) return
+        issueSummaryJob?.cancel()
+        issueSummaryJob = viewModelScope.launch {
+            _uiState.update { state ->
+                state.copy(
+                    issueSummaries = projects.associate { project ->
+                        // Keep a previously loaded count visible while it is being refreshed,
+                        // so a pull of the list doesn't blink every card back to a spinner.
+                        val previous = state.issueSummaries[project.name]
+                        project.name to (previous?.copy(isLoading = true) ?: ProjectIssueSummary.LOADING)
+                    }
+                )
+            }
+            projects.forEach { project -> loadIssueSummary(project.name) }
+        }
+    }
+
+    /** Re-reads one project's counts — used when returning from its issues screen. */
+    fun refreshIssueSummary(projectName: String) {
+        if (!gitHubRepository.isConfigured) return
+        viewModelScope.launch { loadIssueSummary(projectName) }
+    }
+
+    private suspend fun loadIssueSummary(projectName: String) {
+        val summary = gitHubRepository.issuesFor(projectName).fold(
+            onSuccess = { list -> ProjectIssueSummary(counts = list.counts) },
+            onFailure = { error ->
+                ProjectIssueSummary(errorMessage = error.toPersianMessage("خواندن ایشوها ناموفق بود"))
+            }
+        )
+        _uiState.update { state ->
+            state.copy(issueSummaries = state.issueSummaries + (projectName to summary))
         }
     }
 

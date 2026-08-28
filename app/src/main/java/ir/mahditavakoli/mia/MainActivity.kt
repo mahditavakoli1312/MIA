@@ -7,8 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import ir.mahditavakoli.mia.network.NetworkModule
+import ir.mahditavakoli.mia.ui.MiaApp
 import ir.mahditavakoli.mia.ui.auth.LoginScreen
-import ir.mahditavakoli.mia.ui.main.MainScreen
 import ir.mahditavakoli.mia.ui.theme.MIATheme
 
 class MainActivity : ComponentActivity() {
@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
             MIATheme {
                 val isLoggedIn by NetworkModule.sessionManager.isLoggedIn.collectAsState()
                 if (isLoggedIn) {
-                    MainScreen(onLogout = { NetworkModule.sessionManager.clear() })
+                    MiaApp(onLogout = { NetworkModule.sessionManager.clear() })
                 } else {
                     LoginScreen()
                 }

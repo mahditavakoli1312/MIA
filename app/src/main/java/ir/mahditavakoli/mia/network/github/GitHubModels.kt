@@ -98,8 +98,54 @@ data class PutSecretBody(
     @SerialName("key_id") val keyId: String
 )
 
+/**
+ * One issue as the list/detail endpoints return it.
+ *
+ * The list endpoint (`GET /repos/{owner}/{repo}/issues`) also returns pull requests — GitHub
+ * models a PR as an issue — and the only way to tell them apart is [pullRequest], which is
+ * present on PRs and absent on real issues. Callers that want issues must filter on it.
+ */
 @Serializable
-data class GitHubIssue(
+data class GitHubIssueDetail(
     val number: Int,
-    @SerialName("html_url") val htmlUrl: String
+    val title: String,
+    val body: String? = null,
+    /** "open" or "closed". */
+    val state: String = "open",
+    val user: GitHubUser? = null,
+    val labels: List<GitHubLabel> = emptyList(),
+    /** How many comments the issue has, so the list can show a count without a second call. */
+    val comments: Int = 0,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("closed_at") val closedAt: String? = null,
+    @SerialName("html_url") val htmlUrl: String = "",
+    /** Non-null only when this row is really a pull request. */
+    @SerialName("pull_request") val pullRequest: PullRequestRef? = null
 )
+
+/** Marker object GitHub attaches to issue rows that are actually pull requests. */
+@Serializable
+data class PullRequestRef(
+    @SerialName("html_url") val htmlUrl: String = ""
+)
+
+@Serializable
+data class GitHubLabel(
+    val name: String,
+    /** Six hex digits without a leading '#'. */
+    val color: String = ""
+)
+
+/** GET/POST /repos/{owner}/{repo}/issues/{number}/comments */
+@Serializable
+data class GitHubIssueComment(
+    val id: Long,
+    val body: String = "",
+    val user: GitHubUser? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("html_url") val htmlUrl: String = ""
+)
+
+/** POST /repos/{owner}/{repo}/issues/{number}/comments */
+@Serializable
+data class CreateCommentBody(val body: String)

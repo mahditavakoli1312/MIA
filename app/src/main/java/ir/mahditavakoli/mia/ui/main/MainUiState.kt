@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.ui.main
 
+import ir.mahditavakoli.mia.data.model.IssueCounts
 import ir.mahditavakoli.mia.data.model.Project
 
 sealed interface RecordingState {
@@ -42,6 +43,24 @@ data class AgentModelDialogState(
     val isApplying: Boolean = false
 )
 
+/**
+ * The open/closed issue counts shown on one project card.
+ *
+ * Loading is per-card rather than global: the project list comes from Supabase and the counts
+ * from GitHub, so the cards must be able to render while their counts are still in flight, and
+ * one repo failing (deleted, renamed, never created) must not blank out the others.
+ */
+data class ProjectIssueSummary(
+    val isLoading: Boolean = false,
+    val counts: IssueCounts? = null,
+    /** Set when the read failed — the card shows a quiet retry instead of a wrong "0". */
+    val errorMessage: String? = null
+) {
+    companion object {
+        val LOADING = ProjectIssueSummary(isLoading = true)
+    }
+}
+
 data class MainUiState(
     val projects: List<Project> = emptyList(),
     val isLoadingProjects: Boolean = false,
@@ -65,7 +84,9 @@ data class MainUiState(
     /** False without a GitHub token — the per-project model picker has nothing to talk to. */
     val isGitHubConfigured: Boolean = false,
     /** Non-null while the model picker is open for one project. */
-    val agentModelDialog: AgentModelDialogState? = null
+    val agentModelDialog: AgentModelDialogState? = null,
+    /** Issue counts per project name; missing means "not requested yet". */
+    val issueSummaries: Map<String, ProjectIssueSummary> = emptyMap()
 ) {
     /** True while any command is in flight — both front doors stay disabled until it lands. */
     val isBusy: Boolean get() = recordingState is RecordingState.Processing
