@@ -15,12 +15,12 @@ val secret = rootProject.extra["miaSecret"] as (String) -> String
 
 android {
     namespace = "ir.mahditavakoli.mia"
-    compileSdk = 36
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "ir.mahditavakoli.mia"
         minSdk = 24
-        targetSdk = 36
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -31,7 +31,7 @@ android {
         // runtime value entered in Settings (stored encrypted) takes precedence. See SecretStore.
         buildConfigField("String", "GEMINI_API_KEY", "\"${secret("GEMINI_API_KEY")}\"")
         // Optional build-time default for the OpenRouter key. It powers both the in-app typed
-        // commands (stealth/ox-alpha) and the CI issue agent (pushed to each repo as the
+        // commands (minimax/minimax-m3:free) and the CI issue agent (pushed to each repo as the
         // OPENROUTER_API_KEY Actions secret); the runtime override from Settings wins.
         buildConfigField("String", "OPENROUTER_API_KEY", "\"${secret("OPENROUTER_API_KEY")}\"")
         // Optional second OpenRouter key. Nothing routes to it until the primary one reports a

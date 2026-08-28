@@ -26,6 +26,22 @@ enum class CommandStage {
     EXECUTING
 }
 
+/**
+ * The "which model does this project's AI team run on" sheet, open for exactly one project.
+ *
+ * [currentModel] is read from the repo when the sheet opens rather than remembered: the
+ * workflow files on GitHub are the source of truth and can change without MIA's involvement.
+ * Null once loading finishes means the repo names no model at all — an older bootstrap.
+ */
+data class AgentModelDialogState(
+    val projectName: String,
+    val repoName: String,
+    val currentModel: String? = null,
+    val isLoadingCurrent: Boolean = true,
+    /** True from the moment a model is picked until GitHub has been written. */
+    val isApplying: Boolean = false
+)
+
 data class MainUiState(
     val projects: List<Project> = emptyList(),
     val isLoadingProjects: Boolean = false,
@@ -45,7 +61,11 @@ data class MainUiState(
     /** What the user last saved as the OpenRouter API key (empty if none). */
     val openRouterApiKey: String = "",
     /** The spare OpenRouter key, used only once the primary one is rate limited/out of credit. */
-    val openRouterFallbackApiKey: String = ""
+    val openRouterFallbackApiKey: String = "",
+    /** False without a GitHub token — the per-project model picker has nothing to talk to. */
+    val isGitHubConfigured: Boolean = false,
+    /** Non-null while the model picker is open for one project. */
+    val agentModelDialog: AgentModelDialogState? = null
 ) {
     /** True while any command is in flight — both front doors stay disabled until it lands. */
     val isBusy: Boolean get() = recordingState is RecordingState.Processing

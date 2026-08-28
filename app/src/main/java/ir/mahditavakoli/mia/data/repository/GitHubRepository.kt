@@ -25,6 +25,7 @@ class GitHubRepository(
     val isConfigured: Boolean,
     private val bootstrapper: RepoBootstrapper,
     private val secretStore: SecretStore,
+    private val agentModelMigrator: AgentModelMigrator,
     private val createPrivate: Boolean = true
 ) {
     // The authenticated user's login, resolved once and reused as the repo/issue owner.
@@ -79,6 +80,23 @@ class GitHubRepository(
                 labels = if (agentHandled) listOf(AGENT_LABEL) else null
             )
         )
+    }
+
+    /**
+     * The model this project's repo runs its AI team on right now, or null when the repo has no
+     * workflow naming one. Read straight from the repo rather than remembered locally: the files
+     * are the source of truth, and they can be edited on GitHub without MIA ever seeing it.
+     */
+    suspend fun agentModelFor(projectName: String): Result<String?> = runCatching {
+        agentModelMigrator.currentModel(owner(), repoNameFor(projectName))
+    }
+
+    /** Repoints this project's repo at [model]. See [AgentModelMigrator] for what that rewrites. */
+    suspend fun setAgentModel(
+        projectName: String,
+        model: String
+    ): Result<AgentModelMigrator.Outcome> = runCatching {
+        agentModelMigrator.setModel(owner(), repoNameFor(projectName), model)
     }
 
     /**

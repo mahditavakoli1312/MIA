@@ -49,6 +49,22 @@ data class GenerateFromTemplateBody(
     @SerialName("include_all_branches") val includeAllBranches: Boolean = false
 )
 
+/**
+ * GET /repos/{owner}/{repo}/contents/{path} — one file's content and its blob SHA.
+ *
+ * [content] is base64 and GitHub wraps it at 60 columns, so it must be decoded with the line
+ * breaks stripped (or a MIME decoder). [sha] is what a later PUT has to echo back to prove it
+ * is replacing the version it read, instead of clobbering someone else's commit.
+ */
+@Serializable
+data class ContentFile(
+    val path: String,
+    val sha: String,
+    val content: String = "",
+    /** "base64" for normal files; "none" when the blob is too large to inline (>1 MB). */
+    val encoding: String = "base64"
+)
+
 /** PUT /repos/{owner}/{repo}/contents/{path} — create/update a single file. */
 @Serializable
 data class PutContentBody(

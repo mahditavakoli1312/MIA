@@ -45,6 +45,18 @@ interface GitHubApi {
     ): GitHubIssue
 
     /**
+     * Reads one file. Returns the raw [Response] because "this repo doesn't have that file"
+     * is an ordinary answer here (repos bootstrapped by older MIA versions carry a different
+     * set), and a 404 should read as data rather than as a thrown exception.
+     */
+    @GET("repos/{owner}/{repo}/contents/{path}")
+    suspend fun getContent(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path(value = "path", encoded = true) path: String
+    ): Response<ContentFile>
+
+    /**
      * Create or update a file. [path] is the repo-relative path (may contain slashes —
      * `encoded = true` keeps them as path separators rather than escaping them).
      */

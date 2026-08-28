@@ -3,8 +3,10 @@ package ir.mahditavakoli.mia.ui.main
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import ir.mahditavakoli.mia.data.model.Project
 import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
+import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
 import ir.mahditavakoli.mia.data.repository.CommandClassification
 import ir.mahditavakoli.mia.data.repository.GeminiVoiceIntentClassifier
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
@@ -52,13 +54,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         api = NetworkModule.gitHubApi,
         isConfigured = NetworkModule.isGitHubConfigured,
         bootstrapper = NetworkModule.repoBootstrapper,
-        secretStore = secretStore
+        secretStore = secretStore,
+        agentModelMigrator = NetworkModule.agentModelMigrator
     )
     private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi, gitHubRepository)
     private val projectRepository = ProjectRepository(NetworkModule.supabaseApi)
 
     private val _uiState = MutableStateFlow(
         MainUiState(
+            isGitHubConfigured = NetworkModule.isGitHubConfigured,
             agentHandledByDefault = secretStore.agentHandledByDefault,
             geminiApiKey = secretStore.geminiApiKeyOverride,
             openRouterApiKey = secretStore.agentApiKeyOverride,
@@ -136,6 +140,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+        }
+    }
+
+    // Agent model ------------------------------------------------------------
+
+    /**
+     * Opens the model picker for one project and starts reading what its repo runs on today.
+     * The read is best-effort: a repo that doesn't exist yet (the project was made before
+     * GitHub was configured) simply shows no current model rather than an error.
+     */
+    fun onChangeAgentModelClick(project: Project) {
+        _uiState.update {
+            it.copy(
+                agentModelDialog = AgentModelDialogState(
+                    projectName = project.name,
+                    repoName = GitHubRepository.repoNameFor(project.name)
+                )
+            )
+        }
+        viewModelScope.launch {
+            val current = gitHubRepository.agentModelFor(project.name).getOrNull()
+            _uiState.update { state ->
+                // Ignore a late answer for a sheet the user already closed or reopened elsewhere.
+                val dialog = state.agentModelDialog
+                if (dialog == null || dialog.projectName != project.name) return@update state
+                state.copy(
+                    agentModelDialog = dialog.copy(currentModel = current, isLoadingCurrent = false)
+                )
+            }
+        }
+    }
+
+    fun dismissAgentModelDialog() {
+        // Never yank the sheet away mid-write; the write path closes it when it lands.
+        if (_uiState.value.agentModelDialog?.isApplying == true) return
+        _uiState.update { it.copy(agentModelDialog = null) }
+    }
+
+    /**
+     * Rewrites the AGENT_MODEL default in this project's repo so every future @tec / @po / @qc
+     * run uses [model]. Reports per-file what happened, because "committed 3 files" and "this
+     * repo has no OpenRouter workflows at all" are very different answers to the same tap.
+     */
+    fun onAgentModelSelected(model: String) {
+        val dialog = _uiState.value.agentModelDialog ?: return
+        if (dialog.isApplying) return
+        _uiState.update { it.copy(agentModelDialog = dialog.copy(isApplying = true)) }
+        viewModelScope.launch {
+            gitHubRepository.setAgentModel(dialog.projectName, model).fold(
+                onSuccess = { outcome ->
+                    _uiState.update { it.copy(agentModelDialog = null) }
+                    emitEvent(outcome.asPersianMessage(dialog.repoName))
+                },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(agentModelDialog = dialog.copy(isApplying = false))
+                    }
+                    emitEvent(error.toPersianMessage("تغییر مدل ایجنت ناموفق بود"))
+                }
+            )
         }
     }
 
@@ -286,4 +350,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         voiceRecorder.cancel()
     }
+}
+
+
+/**
+ * What to tell the user after a model change. The distinctions matter: a repo that MIA never
+ * bootstrapped, one that was already on the chosen model, and one where two files committed but
+ * a third was rejected all look identical from a bare "done".
+ */
+private fun AgentModelMigrator.Outcome.asPersianMessage(repoName: String): String = when {
+    isNotAnOpenRouterRepo ->
+        "مخزن «$repoName» فایل‌های تیم AI روی OpenRouter را ندارد؛ چیزی برای تغییر نبود."
+
+    didChange && failed.isEmpty() ->
+        "مدل ایجنت مخزن «$repoName» روی $model تنظیم شد (${updated.size} فایل به‌روزرسانی شد)."
+
+    didChange ->
+        "مدل ایجنت مخزن «$repoName» روی $model تنظیم شد، اما ${failed.size} فایل نوشته نشد: " +
+            failed.joinToString("، ") { (path, reason) -> "${path.substringAfterLast('/')} ($reason)" }
+
+    failed.isNotEmpty() ->
+        "تغییر مدل مخزن «$repoName» ناموفق بود: " +
+            failed.joinToString("، ") { (path, reason) -> "${path.substringAfterLast('/')} ($reason)" }
+
+    else -> "مخزن «$repoName» از قبل روی $model بود."
 }
