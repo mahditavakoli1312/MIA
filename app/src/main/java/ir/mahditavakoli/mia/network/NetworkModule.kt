@@ -3,11 +3,13 @@ package ir.mahditavakoli.mia.network
 import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
+import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.github.GitHubApi
+import ir.mahditavakoli.mia.security.AndroidBase64Decoder
 import ir.mahditavakoli.mia.security.AndroidBase64Encoder
 import ir.mahditavakoli.mia.security.LibsodiumSecretEncryptor
 import ir.mahditavakoli.mia.security.SecretStore
@@ -64,6 +66,18 @@ object NetworkModule {
     fun readBootstrapFiles(): List<BootstrapFile> = BOOTSTRAP_ASSETS.map { (asset, path) ->
         val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
         BootstrapFile(repoPath = path, content = content)
+    }
+
+    /**
+     * Repoints an existing repo's AI team at another model — the counterpart to
+     * [repoBootstrapper], which can only ever set the model on a repo it is creating.
+     */
+    val agentModelMigrator: AgentModelMigrator by lazy {
+        AgentModelMigrator(
+            api = gitHubApi,
+            base64 = AndroidBase64Encoder,
+            base64Decoder = AndroidBase64Decoder
+        )
     }
 
     /** Wires new repos up to the AI team (workflows + script, labels, secret). */
@@ -159,7 +173,7 @@ object NetworkModule {
     }
 
     /**
-     * Typed commands: prompt pre-processing then intent extraction on `stealth/ox-alpha`.
+     * Typed commands: prompt pre-processing then intent extraction on `minimax/minimax-m3:free`.
      * The key is not in an interceptor — it is passed per call from [secretStore], so a key the
      * user edits in Settings takes effect immediately instead of on the next app start.
      */

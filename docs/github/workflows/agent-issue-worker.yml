@@ -93,7 +93,7 @@ jobs:
 
       # OpenRouter's credit counter, sampled either side of the run. The delta is what this one
       # issue actually cost in dollars — the authoritative number even when no per-token
-      # breakdown can be parsed. A free model (`:free`, or stealth/ox-alpha) legitimately moves it by $0.
+      # breakdown can be parsed. A free model (a `:free` id) legitimately moves it by $0.
       - name: Read OpenRouter credits (before)
         id: credits_before
         env:
@@ -106,12 +106,13 @@ jobs:
 
       # OpenCode reads OPENROUTER_API_KEY automatically (no interactive `opencode auth login`).
       # Models are addressed "provider/model" and OpenCode splits on the FIRST "/", so
-      # `openrouter/stealth/ox-alpha` means provider=openrouter, model=stealth/ox-alpha.
-      # stealth/ox-alpha is a free stealth model (no charge for prompt or completion tokens)
-      # with a 1M-token context and tool calling — which OpenCode needs to edit files at all.
-      # Being anonymously operated, it can be rate limited or withdrawn without notice, and its
-      # prompts/completions are retained by the provider (not used for training), so don't send
-      # it anything secret; override with an AGENT_MODEL repo/environment variable to switch.
+      # `openrouter/minimax/minimax-m3:free` means provider=openrouter,
+      # model=minimax/minimax-m3:free. That model is free (no charge for prompt or completion
+      # tokens) with a 1M-token context and tool calling — which OpenCode needs to edit files at
+      # all. It replaced stealth/ox-alpha, which OpenRouter withdrew: any free endpoint can be
+      # rate limited or pulled without notice, and prompts/completions may be logged depending on
+      # your OpenRouter privacy settings, so don't send it anything secret; override with an
+      # AGENT_MODEL repo/environment variable to switch.
       # The step degrades cleanly on a 429 instead of failing red.
       - name: Run OpenCode CLI
         id: agent
@@ -120,7 +121,7 @@ jobs:
           # Optional spare key. Free-tier OpenRouter keys are capped per day, so without one a
           # single exhausted key stops TEC outright until the quota resets.
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/stealth/ox-alpha' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
         run: |
           set -o pipefail
           if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
@@ -207,7 +208,7 @@ jobs:
           OPENCODE_LOG: ${{ runner.temp }}/opencode-output.log
           REPORT_FILE: ${{ runner.temp }}/token-report.md
           TRAILER_FILE: ${{ runner.temp }}/token-trailer.txt
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/stealth/ox-alpha' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
           AGENT_STATUS: ${{ steps.agent.outputs.status }}
           USAGE_BEFORE: ${{ steps.credits_before.outputs.usage }}
           USAGE_AFTER: ${{ steps.credits_after.outputs.usage }}
@@ -233,7 +234,7 @@ jobs:
       - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit), and stealth models such as `stealth/ox-alpha` at whatever their provider allows. Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'

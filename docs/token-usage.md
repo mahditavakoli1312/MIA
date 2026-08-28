@@ -227,7 +227,7 @@ case "$help" in *--format*) format="--format json" ;; esac
   "cost": 0,
   "tokens": { "total": 36133, "input": 136, "output": 239, "reasoning": 174,
               "cache": { "read": 35584, "write": 0 } },
-  "modelID": "stealth/ox-alpha",
+  "modelID": "minimax/minimax-m3:free",
   "providerID": "openrouter"
 }
 ```
@@ -281,7 +281,7 @@ case "$help" in *--format*) format="--format json" ;; esac
 > | Thinking | 174 |
 > | **Total** | **41,083** |
 >
-> Model `stealth/ox-alpha` · 2 model calls · cost **$0.00** (free model)
+> Model `minimax/minimax-m3:free` · 2 model calls · cost **$0.00** (free model)
 >
 > [Workflow run](https://github.com/…)
 
@@ -297,7 +297,7 @@ case "$help" in *--format*) format="--format json" ;; esac
 ```
 tec: resolve #12 — صفحه ورود
 
-Token-Spend: 41,083 tokens ($0.0000) via openrouter/stealth/ox-alpha
+Token-Spend: 41,083 tokens ($0.0000) via openrouter/minimax/minimax-m3:free
 ```
 
 </div>
@@ -313,7 +313,7 @@ Token-Spend: 41,083 tokens ($0.0000) via openrouter/stealth/ox-alpha
 >
 > ---
 >
-> 🧾 **Spend for this reply** — 2,406 tokens · $0.00 (free model) · `stealth/ox-alpha`
+> 🧾 **Spend for this reply** — 2,406 tokens · $0.00 (free model) · `minimax/minimax-m3:free`
 
 </div>
 

@@ -21,8 +21,9 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Minimal settings surface (all stored encrypted): the Gemini API key used for voice→intent,
- * the OpenRouter API key — which now powers both typed commands in the app (`stealth/ox-alpha`)
- * and the CI agent, as each repo's `OPENROUTER_API_KEY` Actions secret — an optional spare
+ * the OpenRouter API key — which now powers both typed commands in the app
+ * (`minimax/minimax-m3:free`) and the CI agent, as each repo's `OPENROUTER_API_KEY` Actions
+ * secret — an optional spare
  * OpenRouter key that takes over when the primary one hits its free-tier limit, and whether new
  * tasks are agent-handled by default.
  */

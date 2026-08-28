@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,19 +26,41 @@ import androidx.compose.ui.unit.dp
 import ir.mahditavakoli.mia.data.model.Project
 import ir.mahditavakoli.mia.data.model.Task
 
+/**
+ * @param canChangeAgentModel false without a GitHub token — there is no repo to repoint, so the
+ *        button is hidden rather than shown and then failing on tap.
+ * @param onChangeAgentModel opens the picker that repoints this project's repo (@tec/@po/@qc).
+ */
 @Composable
-fun ProjectCard(project: Project, modifier: Modifier = Modifier) {
+fun ProjectCard(
+    project: Project,
+    modifier: Modifier = Modifier,
+    canChangeAgentModel: Boolean = false,
+    onChangeAgentModel: () -> Unit = {}
+) {
     Card(
         modifier = modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(
-                text = project.name,
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = project.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                if (canChangeAgentModel) {
+                    IconButton(onClick = onChangeAgentModel) {
+                        Icon(
+                            imageVector = Icons.Filled.SmartToy,
+                            contentDescription = "تغییر مدل ایجنت این پروژه",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
             if (project.tasks.isEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 Text(

@@ -166,7 +166,12 @@ fun MainScreen(
                         contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 72.dp)
                     ) {
                         items(uiState.projects, key = { it.id ?: it.name }) { project ->
-                            ProjectCard(project, modifier = Modifier.padding(bottom = 12.dp))
+                            ProjectCard(
+                                project = project,
+                                modifier = Modifier.padding(bottom = 12.dp),
+                                canChangeAgentModel = uiState.isGitHubConfigured,
+                                onChangeAgentModel = { viewModel.onChangeAgentModelClick(project) }
+                            )
                         }
                     }
                 }
@@ -182,6 +187,14 @@ fun MainScreen(
                     StatusBanner(uiState.recordingState, uiState.stage)
                 }
             }
+        }
+
+        uiState.agentModelDialog?.let { dialog ->
+            AgentModelDialog(
+                state = dialog,
+                onConfirm = viewModel::onAgentModelSelected,
+                onDismiss = viewModel::dismissAgentModelDialog
+            )
         }
 
         if (showSettings) {

@@ -10,7 +10,7 @@
 //   2. The OpenRouter credit counter (GET /api/v1/key → data.usage), sampled before and after the
 //      run by the workflow and passed in as USAGE_BEFORE/USAGE_AFTER. That delta is the
 //      authoritative dollar cost even when no tokens could be parsed — it is what OpenRouter
-//      actually billed. On a free model (`:free`, or stealth/ox-alpha) it is legitimately $0.
+//      actually billed. On a free model (a `:free` id) it is legitimately $0.
 //
 // Nothing here is allowed to fail the job: a run that produced a working PR must not go red
 // because accounting was unavailable. Every failure path degrades to a shorter report.
@@ -19,8 +19,8 @@ const fs = require("fs");
 
 const logPath = process.env.OPENCODE_LOG || "";
 const model = process.env.AGENT_MODEL || "unknown";
-// Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models
-// (e.g. stealth/ox-alpha), which carry no suffix but still bill nothing.
+// Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models,
+// which carry no suffix but still bill nothing.
 const isFreeModel = (id) => id.includes(":free") || id.includes("stealth/");
 const status = process.env.AGENT_STATUS || "ok";
 const issueNumber = process.env.ISSUE_NUMBER;

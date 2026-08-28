@@ -41,7 +41,7 @@ jobs:
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           # Same free model as TEC; override with an AGENT_MODEL repo variable.
           # (Raw OpenRouter model id — NO "openrouter/" prefix here.)
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'stealth/ox-alpha' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

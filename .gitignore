@@ -16,3 +16,7 @@ local.properties
 
 # Kotlin compiler daemon session files (created by Gradle builds)
 .kotlin/
+
+# Decrypted working copy of secrets.enc -- produced by ./gradlew secretsDecrypt.
+# The encrypted secrets.enc and the public secrets.public.properties ARE committed.
+/secrets.local.properties

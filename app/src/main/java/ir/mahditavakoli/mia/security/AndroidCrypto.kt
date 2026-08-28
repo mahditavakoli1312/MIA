@@ -4,11 +4,15 @@ import android.util.Base64
 import com.goterl.lazysodium.LazySodiumAndroid
 import com.goterl.lazysodium.SodiumAndroid
 import com.goterl.lazysodium.interfaces.Box
+import ir.mahditavakoli.mia.data.repository.Base64Decoder
 import ir.mahditavakoli.mia.data.repository.Base64Encoder
 import ir.mahditavakoli.mia.data.repository.SecretEncryptor
 
 /** Production [Base64Encoder] backed by `android.util.Base64` (no line wrapping). */
 val AndroidBase64Encoder = Base64Encoder { bytes -> Base64.encodeToString(bytes, Base64.NO_WRAP) }
+
+/** Production [Base64Decoder]; callers strip GitHub's line wrapping before handing it over. */
+val AndroidBase64Decoder = Base64Decoder { value -> Base64.decode(value, Base64.DEFAULT) }
 
 /**
  * Production [SecretEncryptor] that seals a value the way the GitHub Actions secrets API

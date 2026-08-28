@@ -2,6 +2,7 @@ package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.CreateLabelBody
+import ir.mahditavakoli.mia.network.github.ContentFile
 import ir.mahditavakoli.mia.network.github.CreateRepoBody
 import ir.mahditavakoli.mia.network.github.GenerateFromTemplateBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
@@ -37,6 +38,12 @@ class FakeGitHubApi : GitHubApi {
     var putSecretBody: PutSecretBody? = null
     /** Every secret written, in order — the bootstrapper may store more than one. */
     val putSecrets = mutableListOf<Pair<String, PutSecretBody>>()
+
+    /**
+     * Files this repo "contains", keyed by repo path. Anything not in here answers 404, which
+     * is what an older bootstrap that shipped fewer files looks like.
+     */
+    val contents = mutableMapOf<String, String>()
 
     // Response controls (default: everything succeeds).
     var putContentResponse: () -> Response<Unit> = { Response.success(Unit) }
@@ -74,6 +81,20 @@ class FakeGitHubApi : GitHubApi {
 
     override suspend fun createIssue(owner: String, repo: String, body: CreateIssueBody): GitHubIssue =
         throw UnsupportedOperationException("not used by the bootstrapper")
+
+    override suspend fun getContent(owner: String, repo: String, path: String): Response<ContentFile> {
+        val text = contents[path] ?: return Response.error(404, "".toResponseBody(null))
+        return Response.success(
+            ContentFile(
+                path = path,
+                sha = "sha-" + path.hashCode(),
+                // GitHub wraps its base64 at 60 columns; reproduce that so the decode path is
+                // actually exercised rather than accidentally passing on unwrapped input.
+                content = java.util.Base64.getMimeEncoder(60, "\n".toByteArray())
+                    .encodeToString(text.toByteArray(Charsets.UTF_8))
+            )
+        )
+    }
 
     override suspend fun putContent(
         owner: String,

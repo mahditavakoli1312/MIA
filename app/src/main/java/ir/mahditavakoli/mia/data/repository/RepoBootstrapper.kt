@@ -15,6 +15,14 @@ fun interface Base64Encoder {
 }
 
 /**
+ * The other direction, for reading a file back out of the GitHub contents API. Abstracted for
+ * the same reason as [Base64Encoder]: `android.util.Base64` is a stub on the JVM test runtime.
+ */
+fun interface Base64Decoder {
+    fun decode(value: String): ByteArray
+}
+
+/**
  * Seals [plaintext] for GitHub Actions using a libsodium sealed box against the repo's
  * base64 Curve25519 public key, returning base64 ciphertext. Abstracted so the native
  * libsodium dependency stays out of host unit tests.
