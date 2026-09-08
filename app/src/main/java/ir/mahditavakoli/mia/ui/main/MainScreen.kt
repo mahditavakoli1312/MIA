@@ -214,6 +214,8 @@ fun MainScreen(
                 geminiApiKey = uiState.geminiApiKey,
                 openRouterApiKey = uiState.openRouterApiKey,
                 openRouterFallbackApiKey = uiState.openRouterFallbackApiKey,
+                miniMaxApiKey = uiState.miniMaxApiKey,
+                textModelId = uiState.textModelId,
                 onAgentHandledChange = viewModel::onAgentHandledChange,
                 onGeminiApiKeyChange = viewModel::onGeminiApiKeyChange,
                 onSaveGeminiApiKey = viewModel::saveGeminiApiKey,
@@ -221,6 +223,9 @@ fun MainScreen(
                 onSaveOpenRouterApiKey = viewModel::saveOpenRouterApiKey,
                 onOpenRouterFallbackApiKeyChange = viewModel::onOpenRouterFallbackApiKeyChange,
                 onSaveOpenRouterFallbackApiKey = viewModel::saveOpenRouterFallbackApiKey,
+                onMiniMaxApiKeyChange = viewModel::onMiniMaxApiKeyChange,
+                onSaveMiniMaxApiKey = viewModel::saveMiniMaxApiKey,
+                onTextModelSelected = viewModel::onTextModelSelected,
                 onDismiss = { showSettings = false }
             )
         }

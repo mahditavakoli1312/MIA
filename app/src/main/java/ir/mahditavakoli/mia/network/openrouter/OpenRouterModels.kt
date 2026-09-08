@@ -17,6 +17,17 @@ import kotlinx.serialization.Serializable
 const val DEFAULT_TEXT_MODEL = "minimax/minimax-m3:free"
 
 /**
+ * The same model on MiniMax's own platform, addressed the way `api.minimax.io` names it —
+ * capitalized, no vendor prefix, no `:free` tier suffix, because there is no free tier there.
+ *
+ * It is offered next to [DEFAULT_TEXT_MODEL] rather than instead of it: reaching MiniMax
+ * directly spends the user's own MiniMax balance, and in exchange the request does not queue
+ * behind OpenRouter's shared free-tier limit. See
+ * [ir.mahditavakoli.mia.network.openrouter.AgentProvider.MINIMAX].
+ */
+const val MINIMAX_DIRECT_MODEL = "MiniMax-M3"
+
+/**
  * The strongest thinking budget MIA asks for. OpenRouter accepts the full effort ladder for
  * this model, and "none" is the one rung that actually stops it thinking (it reports zero
  * reasoning tokens; every other level reports hundreds), so "max" is the ceiling.
@@ -99,7 +110,20 @@ data class ChatCompletionResponse(
     /** Absent on some providers/errors, so every consumer must tolerate null. */
     val usage: OpenRouterUsage? = null,
     /** OpenRouter reports the model that actually served the request; may differ from the alias. */
-    val model: String? = null
+    val model: String? = null,
+    /**
+     * MiniMax-only: its endpoints can answer HTTP 200 and still have failed, reporting the real
+     * outcome in this envelope (`status_code` 0 means success). Absent on OpenRouter, so callers
+     * must treat null as "fine" — see [MiniMaxBaseResp].
+     */
+    @SerialName("base_resp") val baseResp: MiniMaxBaseResp? = null
+)
+
+/** MiniMax's in-body status envelope. `statusCode` 0 is success; anything else is the error. */
+@Serializable
+data class MiniMaxBaseResp(
+    @SerialName("status_code") val statusCode: Int = 0,
+    @SerialName("status_msg") val statusMsg: String = ""
 )
 
 @Serializable
@@ -128,3 +152,16 @@ data class OpenRouterUsage(
 data class CompletionTokensDetails(
     @SerialName("reasoning_tokens") val reasoningTokens: Int = 0
 )
+
+
+/**
+ * One OpenAI-compatible chat completion, whoever serves it.
+ *
+ * Retrofit will not build an interface that extends another, so [OpenRouterApi] and
+ * [ir.mahditavakoli.mia.network.minimax.MiniMaxApi] cannot share a supertype — but their
+ * request and response bodies are the same shape, so callers that only need "send this, get
+ * that back" take this instead of either concrete API and stop caring which host answered.
+ */
+fun interface ChatCompleter {
+    suspend fun complete(bearerToken: String, request: ChatCompletionRequest): ChatCompletionResponse
+}

@@ -2,11 +2,12 @@ package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.Project
 import ir.mahditavakoli.mia.data.model.TokenUsage
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.ChatCompleter
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionRequest
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionResponse
 import ir.mahditavakoli.mia.network.openrouter.ChatMessage
 import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
-import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterUsage
 import ir.mahditavakoli.mia.network.openrouter.PromptRefinementPrompt
 import ir.mahditavakoli.mia.network.openrouter.Reasoning
@@ -18,7 +19,10 @@ import retrofit2.HttpException
 
 /**
  * The typed-command counterpart to [GeminiVoiceIntentClassifier]: text in, the same intent
- * array out, but running on OpenRouter's free `minimax/minimax-m3:free` model instead of Gemini.
+ * array out, but running on a chat model instead of Gemini — OpenRouter's free
+ * `minimax/minimax-m3:free` by default, or whatever the user picked in Settings, including
+ * `MiniMax-M3` on their own MiniMax account. Which host answers is [provider]'s business; this
+ * class only ever sees an OpenAI-compatible request and reply.
  *
  * Three stages, deliberately separated because each is bad at the others' job:
  *  1. [PersianText.normalize] — free, instant, on-device: Persian letter forms, ASCII digits,
@@ -43,16 +47,18 @@ import retrofit2.HttpException
  * whose daily quota routinely runs out mid-day.
  */
 class OxTextIntentClassifier(
-    private val api: OpenRouterApi,
+    private val api: ChatCompleter,
     private val json: Json,
-    /** Supplies the runtime OpenRouter key (Settings override, else BuildConfig default). */
+    /** Supplies the runtime API key for [provider] (Settings override, else BuildConfig default). */
     private val apiKeyProvider: () -> String?,
     /**
-     * Supplies the spare OpenRouter key, or null when none is configured. Never used until the
-     * primary one answers with a limit — see [KeyRing].
+     * Supplies the spare key, or null when none is configured (MiniMax has no notion of one).
+     * Never used until the primary one answers with a limit — see [KeyRing].
      */
     private val fallbackApiKeyProvider: () -> String? = { null },
     private val model: String = DEFAULT_TEXT_MODEL,
+    /** Which service [api] talks to — used only for accurate, actionable error messages. */
+    private val provider: AgentProvider = AgentProvider.OPENROUTER,
     /**
      * How hard the model may think, sent on both calls. [Reasoning.MAX] is the top setting;
      * a caller pointing [model] at a non-reasoning model should pass null.
@@ -70,7 +76,7 @@ class OxTextIntentClassifier(
         onRefined: (String) -> Unit = {}
     ): Result<CommandClassification> = runCatching {
         val keys = KeyRing(listOfNotNull(apiKeyProvider(), fallbackApiKeyProvider()))
-        check(keys.isNotEmpty) { "کلید OpenRouter تنظیم نشده است؛ آن را در تنظیمات وارد کنید" }
+        check(keys.isNotEmpty) { "کلید ${provider.label} تنظیم نشده است؛ آن را در تنظیمات وارد کنید" }
         val normalized = PersianText.normalize(rawText)
         require(normalized.isNotBlank()) { "متنی برای پردازش وارد نشده است" }
 
@@ -120,8 +126,14 @@ class OxTextIntentClassifier(
             ),
             keys = keys
         )
+        // MiniMax can answer HTTP 200 with the real failure in `base_resp`; OpenRouter never
+        // sets the field, so a null one is simply "no envelope, nothing to check".
+        val baseResp = response.baseResp
+        check(baseResp == null || baseResp.statusCode == 0) {
+            "خطای ${provider.label} (${baseResp?.statusCode}): ${baseResp?.statusMsg}"
+        }
         val choice = response.choices.firstOrNull()
-            ?: error("پاسخ خالی از OpenRouter دریافت شد")
+            ?: error("پاسخ خالی از ${provider.label} دریافت شد")
         // A truncated answer would parse as broken JSON with a confusing message, so name the
         // real cause: the model ran out of output budget mid-sentence. MIA no longer sends a
         // max_tokens of its own, so reaching this means the model's own ceiling was hit — with
@@ -168,7 +180,7 @@ class OxTextIntentClassifier(
     ): ChatCompletionResponse {
         while (true) {
             try {
-                return api.chatCompletion(bearerToken = "Bearer ${keys.current}", request = request)
+                return api.complete(bearerToken = "Bearer ${keys.current}", request = request)
             } catch (e: HttpException) {
                 if (isOutOfQuota(e.code()) && keys.advance()) continue
                 throw IllegalStateException(describeHttpError(e), e)
@@ -199,11 +211,11 @@ class OxTextIntentClassifier(
     private fun isOutOfQuota(code: Int): Boolean = code == 429 || code == 402
 
     private fun describeHttpError(e: HttpException): String = when (e.code()) {
-        401 -> "کلید OpenRouter نامعتبر یا باطل شده است؛ کلید معتبر را در تنظیمات وارد کنید"
-        402 -> "اعتبار حساب OpenRouter کافی نیست؛ حساب را شارژ کنید یا مدل رایگان را بررسی کنید"
+        401 -> "کلید ${provider.label} نامعتبر یا باطل شده است؛ کلید معتبر را در تنظیمات وارد کنید"
+        402 -> "اعتبار حساب ${provider.label} کافی نیست؛ حساب را شارژ کنید یا مدل دیگری انتخاب کنید"
         403 -> "دسترسی به مدل «$model» با این کلید مجاز نیست"
-        404 -> "مدل «$model» در OpenRouter پیدا نشد؛ نام مدل را بررسی کنید"
-        429 -> "سهمیه رایگان OpenRouter پر شده است؛ کمی بعد دوباره تلاش کنید"
-        else -> "خطای OpenRouter (HTTP ${e.code()})"
+        404 -> "مدل «$model» در ${provider.label} پیدا نشد؛ نام مدل را بررسی کنید"
+        429 -> "سهمیه ${provider.label} پر شده است؛ کمی بعد دوباره تلاش کنید"
+        else -> "خطای ${provider.label} (HTTP ${e.code()})"
     }
 }

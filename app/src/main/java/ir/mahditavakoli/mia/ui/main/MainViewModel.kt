@@ -14,6 +14,10 @@ import ir.mahditavakoli.mia.data.repository.IntentExecutionRepository
 import ir.mahditavakoli.mia.data.repository.OxTextIntentClassifier
 import ir.mahditavakoli.mia.data.repository.ProjectRepository
 import ir.mahditavakoli.mia.network.NetworkModule
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.Reasoning
+import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
+import ir.mahditavakoli.mia.network.openrouter.providerFor
 import ir.mahditavakoli.mia.network.toPersianMessage
 import ir.mahditavakoli.mia.voice.VoiceRecorder
 import kotlinx.coroutines.Job
@@ -29,8 +33,9 @@ import kotlinx.coroutines.launch
  * Orchestrates both ways a command can reach MIA, which converge as soon as they are intents:
  *
  *  - **Voice:** mic -> recorded audio -> Gemini (multimodal transcription + intent extraction).
- *  - **Text:** typed Persian -> on-device normalization -> OpenRouter `minimax/minimax-m3:free`
- *    prompt pre-processing -> intent extraction.
+ *  - **Text:** typed Persian -> on-device normalization -> the model chosen in Settings
+ *    (OpenRouter's free `minimax/minimax-m3:free` by default, or MiniMax M3 on the user's own
+ *    account) for prompt pre-processing -> intent extraction.
  *
  * From there both run the same path: Supabase execution -> refreshed project list. Plain
  * [AndroidViewModel] — the default Compose `viewModel()` factory wires the Application instance
@@ -45,12 +50,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         json = NetworkModule.json,
         apiKeyProvider = { secretStore.geminiApiKey }
     )
-    private val textIntentClassifier = OxTextIntentClassifier(
-        api = NetworkModule.openRouterApi,
-        json = NetworkModule.json,
-        apiKeyProvider = { secretStore.agentApiKey },
-        fallbackApiKeyProvider = { secretStore.agentFallbackApiKey }
-    )
+    /**
+     * Built per command rather than once, because the model is a live Settings choice: a user
+     * who switches to MiniMax after hitting the free tier's daily wall expects the very next
+     * command to go there, not the next app start. Constructing it is a few field reads — the
+     * Retrofit clients behind it are the cached singletons in [NetworkModule].
+     */
+    private fun textIntentClassifier(): OxTextIntentClassifier {
+        val model = secretStore.textModelId
+        val provider = providerFor(model)
+        return OxTextIntentClassifier(
+            api = NetworkModule.chatCompleterFor(provider),
+            json = NetworkModule.json,
+            apiKeyProvider = { secretStore.apiKeyFor(provider) },
+            fallbackApiKeyProvider = { secretStore.fallbackApiKeyFor(provider) },
+            model = model,
+            provider = provider,
+            // MiniMax's own endpoint has no `reasoning` block — it accepts and ignores one, and
+            // returns the trace in a separate field regardless. Sending it would be noise.
+            reasoning = if (provider == AgentProvider.MINIMAX) null else Reasoning.MAX
+        )
+    }
     private val gitHubRepository = NetworkModule.gitHubRepository
     private val intentExecutionRepository = IntentExecutionRepository(NetworkModule.supabaseApi, gitHubRepository)
     private val projectRepository = ProjectRepository(NetworkModule.supabaseApi)
@@ -61,7 +81,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             agentHandledByDefault = secretStore.agentHandledByDefault,
             geminiApiKey = secretStore.geminiApiKeyOverride,
             openRouterApiKey = secretStore.agentApiKeyOverride,
-            openRouterFallbackApiKey = secretStore.agentFallbackApiKeyOverride
+            openRouterFallbackApiKey = secretStore.agentFallbackApiKeyOverride,
+            miniMaxApiKey = secretStore.miniMaxApiKeyOverride,
+            textModelId = secretStore.textModelId
         )
     )
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -126,6 +148,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveOpenRouterFallbackApiKey() {
         secretStore.saveAgentFallbackApiKey(_uiState.value.openRouterFallbackApiKey)
         emitEvent("کلید پشتیبان OpenRouter ذخیره شد")
+    }
+
+    fun onMiniMaxApiKeyChange(value: String) {
+        _uiState.update { it.copy(miniMaxApiKey = value) }
+    }
+
+    /**
+     * Persist the MiniMax platform key. One key, two uses, exactly like the OpenRouter one: the
+     * `MiniMax-M3` option in MIA's own typed-command pipeline, and the per-repo `MINIMAX_API_KEY`
+     * Actions secret a repo pointed at a MiniMax model runs its AI team on.
+     */
+    fun saveMiniMaxApiKey() {
+        secretStore.saveMiniMaxApiKey(_uiState.value.miniMaxApiKey)
+        emitEvent("کلید MiniMax ذخیره شد")
+    }
+
+    /**
+     * Switch the model MIA's own typed commands run on. Persisted immediately and picked up by
+     * the next command — this is a device preference and does not touch any repo, which is what
+     * the per-project picker ([onAgentModelSelected]) is for.
+     */
+    fun onTextModelSelected(modelId: String) {
+        secretStore.textModelId = modelId
+        _uiState.update { it.copy(textModelId = secretStore.textModelId) }
+        val label = agentModelOrNull(modelId)?.label ?: modelId
+        emitEvent("دستورهای متنی از این پس با «$label» پردازش می‌شوند")
     }
 
     // Warn when the GitHub token can't push workflow files (missing `workflow` scope).
@@ -268,7 +316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
-            val result = textIntentClassifier.classify(
+            val result = textIntentClassifier().classify(
                 rawText = text,
                 projects = _uiState.value.projects,
                 // Show the refined prompt as soon as the pre-processing call lands, rather than
@@ -410,6 +458,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private fun AgentModelMigrator.Outcome.asPersianMessage(repoName: String): String = when {
     isNotAnOpenRouterRepo ->
         "مخزن «$repoName» فایل‌های تیم AI روی OpenRouter را ندارد؛ چیزی برای تغییر نبود."
+
+    // A repo whose files predate AGENT_PROVIDER took the model id but will still call
+    // OpenRouter with it, so say so plainly instead of reporting a success that isn't one.
+    didChange && needsProviderAwareFiles ->
+        "مدل ایجنت مخزن «$repoName» روی $model تنظیم شد، اما فایل‌های این مخزن قدیمی‌اند و " +
+            "«AGENT_PROVIDER» ندارند؛ برای اجرا روی ${provider.label} باید ورک‌فلوها را از " +
+            "نسخهٔ جدید MIA به‌روزرسانی کنید."
 
     didChange && failed.isEmpty() ->
         "مدل ایجنت مخزن «$repoName» روی $model تنظیم شد (${updated.size} فایل به‌روزرسانی شد)."

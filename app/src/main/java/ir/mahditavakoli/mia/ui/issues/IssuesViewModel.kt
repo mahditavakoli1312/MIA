@@ -49,7 +49,12 @@ data class IssuesUiState(
     val filter: IssueFilter = IssueFilter.OPEN,
     val errorMessage: String? = null,
     /** Non-null while the new-issue sheet is open. */
-    val newIssue: NewIssueFormState? = null
+    val newIssue: NewIssueFormState? = null,
+    /**
+     * Issue numbers whose Re-do comment is still in flight — a set rather than a flag so two
+     * rows can be re-done in a row without the first one's spinner following the second.
+     */
+    val redoing: Set<Int> = emptySet()
 ) {
     /** The issues the selected tab shows, newest first (GitHub's own list order). */
     val visible: List<RepoIssue> get() = all.withState(open = filter == IssueFilter.OPEN)
@@ -208,6 +213,47 @@ class IssuesViewModel(application: Application) : AndroidViewModel(application) 
                 onFailure = { error ->
                     updateForm { it.copy(isSubmitting = false) }
                     _events.trySend(error.toPersianMessage("ثبت ایشو ناموفق بود"))
+                }
+            )
+        }
+    }
+
+    // Handing an issue back to the agent -------------------------------------
+
+    /**
+     * "Re-do": comments `@tec do this : …` on [issue], which puts it back in the agent's queue
+     * (see [GitHubRepository.redoIssue]).
+     *
+     * The list is left as it is afterwards. The label the workflow attaches lands on GitHub a
+     * moment later, so re-drawing the row from what the app knows now would only show a state
+     * that is already stale; the user pulls to refresh, or opens the issue, to watch it move.
+     */
+    fun onRedo(issue: RepoIssue) {
+        val state = _uiState.value
+        if (state.projectName.isEmpty() || issue.number in state.redoing) return
+        _uiState.update { it.copy(redoing = it.redoing + issue.number) }
+        viewModelScope.launch {
+            gitHubRepository.redoIssue(state.projectName, issue).fold(
+                onSuccess = {
+                    _uiState.update {
+                        it.copy(
+                            redoing = it.redoing - issue.number,
+                            all = it.all.copy(
+                                issues = it.all.issues.map { row ->
+                                    if (row.number == issue.number) {
+                                        row.copy(commentCount = row.commentCount + 1)
+                                    } else {
+                                        row
+                                    }
+                                }
+                            )
+                        )
+                    }
+                    _events.trySend("ایشو #${issue.number} دوباره به ایجنت سپرده شد")
+                },
+                onFailure = { error ->
+                    _uiState.update { it.copy(redoing = it.redoing - issue.number) }
+                    _events.trySend(error.toPersianMessage("سپردن دوباره به ایجنت ناموفق بود"))
                 }
             )
         }

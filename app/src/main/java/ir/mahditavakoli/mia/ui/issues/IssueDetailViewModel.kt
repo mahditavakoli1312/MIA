@@ -135,6 +135,40 @@ class IssueDetailViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /**
+     * "Re-do": hands this issue back to the CI agent by commenting `@tec do this : …`.
+     *
+     * Shares [isPostingComment] with the composer rather than carrying a second flag — both
+     * write a comment to the same thread, and letting the two run at once would only produce
+     * two comments the user did not intend.
+     */
+    fun onRedo() {
+        val state = _uiState.value
+        val issue = state.issue ?: return
+        if (state.isPostingComment) return
+        _uiState.update { it.copy(isPostingComment = true) }
+        viewModelScope.launch {
+            gitHubRepository.redoIssue(state.projectName, issue).fold(
+                onSuccess = { comment ->
+                    _uiState.update {
+                        it.copy(
+                            comments = it.comments + comment,
+                            issue = it.issue?.let { current ->
+                                current.copy(commentCount = current.commentCount + 1)
+                            },
+                            isPostingComment = false
+                        )
+                    }
+                    emitEvent("دوباره به ایجنت سپرده شد؛ در صف اجرا قرار گرفت")
+                },
+                onFailure = { error ->
+                    _uiState.update { it.copy(isPostingComment = false) }
+                    emitEvent(error.toPersianMessage("سپردن دوباره به ایجنت ناموفق بود"))
+                }
+            )
+        }
+    }
+
     private fun emitEvent(message: String) {
         _events.trySend(message)
     }

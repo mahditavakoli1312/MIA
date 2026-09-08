@@ -25,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -98,6 +99,21 @@ fun IssueDetailScreen(
                         }
                     },
                     actions = {
+                        // "Re-do": comment "@tec do this : …" and let the agent queue pick the
+                        // issue up again. Only once the issue has loaded — the comment is built
+                        // from its body, which isn't in hand before that.
+                        if (uiState.issue != null) {
+                            IconButton(
+                                onClick = viewModel::onRedo,
+                                enabled = !uiState.isPostingComment
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Replay,
+                                    contentDescription = "سپردن دوباره به ایجنت",
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
                         // Everything MIA cannot do here — closing the issue, editing it,
                         // reacting — is one tap away on GitHub itself.
                         val htmlUrl = uiState.issue?.htmlUrl.orEmpty()

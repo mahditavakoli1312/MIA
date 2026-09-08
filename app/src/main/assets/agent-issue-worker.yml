@@ -4,11 +4,25 @@
 #   • a human comments "@tec ..." on an issue (e.g. "@tec add a logout button"), or
 #   • an issue is labeled "by-agent" (the path the MIA app attaches programmatically).
 #
-# It lets the OpenCode CLI — driven by a FREE OpenRouter model — implement the issue by
-# editing files, gates the result on the Gradle build, then opens a pull request from a
-# per-issue branch, squash-merges it, and comments back. Nothing is pushed straight to the
-# default branch: every change lands through a reviewable, revertable PR that auto-closes
-# the issue on merge.
+# Both paths do the same thing: they put the issue *in the queue*. The queue is not a GitHub
+# Actions concept — it is the set of open issues carrying the `by-agent` label, and it is
+# drained oldest-first (FIFO) by the matrix in the `work` job below, one issue at a time.
+#
+# Why not lean on `concurrency` alone? Actions keeps at most ONE pending run per concurrency
+# group: label three issues while a run is in flight and the middle one's run is cancelled
+# outright, so its issue would never be worked. Labels survive that — whichever run starts next
+# re-reads the queue and picks up everything still in it, in the order the issues were opened.
+#
+# An issue moves through three labels: `by-agent` (queued) → `agent-running` (being worked) →
+# `done` (merged) or `agent-failed` (it stopped short). Only `by-agent` means "queued", so an
+# issue is never worked twice, and a failed one waits for a human — comment "@tec …" again, or
+# tap Re-do in the MIA app, to put it back in the queue.
+#
+# The work itself: the OpenCode CLI — driven by a free OpenRouter model, or by MiniMax M3 on
+# your own MiniMax account — implements the issue by editing files, the result is gated on the
+# Gradle build, then pushed as a per-issue branch, opened as a pull request and squash-merged.
+# Nothing is pushed straight to the default branch: every change lands through a reviewable,
+# revertable PR that auto-closes the issue on merge.
 #
 # Every run also accounts for itself: the tokens the model spent on this one issue are posted
 # as a comment, recorded as a `Token-Spend:` trailer on the merged commit, and repeated in the
@@ -20,8 +34,12 @@ on:
     types: [labeled]
   issue_comment:
     types: [created]
+  # Manual drain, for a queue left behind by a run that died mid-flight.
+  workflow_dispatch:
 
-# Serialize agent runs so two issues can't race each other on the same repo.
+# Serialize agent runs so two issues can't race each other on the same repo. `cancel-in-progress:
+# false` keeps the running drain alive; a cancelled *pending* run costs nothing, because the
+# next run rebuilds the queue from the labels.
 concurrency:
   group: agent-worker
   cancel-in-progress: false
@@ -32,11 +50,16 @@ permissions:
   pull-requests: write
 
 jobs:
-  work:
-    # Run for a human "@tec" comment, OR the "by-agent" label the MIA app attaches.
-    # (For the label event github.event.comment is null; the first clause is simply false.)
+  # Decides what gets worked, and in what order. Nothing here touches the code.
+  queue:
+    # Run for a human "@tec" comment, OR the "by-agent" label the MIA app attaches, OR a manual
+    # drain. (For the label event github.event.comment is null; the comment clause is then
+    # simply false.) Comments on pull requests arrive through the same `issue_comment` event and
+    # are ignored: a PR is not a queueable issue.
     if: >
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request == null &&
        github.event.comment.user.type != 'Bot' &&
        contains(github.event.comment.body, '@tec')) ||
       (github.event_name == 'issues' &&
@@ -44,39 +67,135 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
-      # Issue title/body are untrusted user input — keep them in env vars and never
-      # interpolate them straight into a shell/YAML expression (command injection).
-      ISSUE_TITLE: ${{ github.event.issue.title }}
-      ISSUE_BODY: ${{ github.event.issue.body }}
+      # `gh` needs a repo to talk to, and this job deliberately doesn't check the code out.
+      GH_REPO: ${{ github.repository }}
+    outputs:
+      issues: ${{ steps.build.outputs.issues }}
+      count: ${{ steps.build.outputs.count }}
     steps:
+      # Repos bootstrapped before the queue shipped only have `by-agent`/`done`. Adding a label
+      # to an issue is not allowed to create it, so make sure the whole set exists first.
+      - name: Ensure the queue labels exist
+        run: |
+          gh label create by-agent      --color 1d76db --description "Queued for the TEC agent"   || true
+          gh label create agent-running --color fbca04 --description "TEC is working on this now" || true
+          gh label create agent-failed  --color b60205 --description "TEC stopped short"          || true
+          gh label create done          --color 0e8a16 --description "Implemented and merged"     || true
+
+      # The "@tec" path joins the queue by taking the same label the app attaches, so there is
+      # exactly one definition of "queued". Labels applied with GITHUB_TOKEN don't trigger
+      # another workflow run, so this cannot bounce back into itself.
+      - name: Enqueue the commented issue
+        if: github.event_name == 'issue_comment'
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --add-label by-agent --remove-label agent-failed || true
+
+      - name: Build the FIFO queue
+        id: build
+        run: |
+          # Oldest first: the order the issues were opened is the order they get worked.
+          # `agent-running` is excluded by construction — a claimed issue no longer has
+          # `by-agent`. 100 is the ceiling for one drain; anything beyond waits for the next run.
+          queue="$(gh issue list --state open --label by-agent --limit 100 \
+                     --json number,createdAt,title \
+                   | jq -c 'sort_by(.createdAt)')"
+          numbers="$(printf '%s' "$queue" | jq -c 'map(.number)')"
+          count="$(printf '%s' "$numbers" | jq 'length')"
+          echo "issues=$numbers" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          # The plan, in the run summary rather than as comments on every issue: a queue of ten
+          # shouldn't cost ten notifications before any work has happened.
+          {
+            echo "### TEC queue ($count issue(s), oldest first)"
+            printf '%s' "$queue" | jq -r '.[] | "1. #\(.number) — \(.title)"'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  work:
+    needs: queue
+    # An empty queue is an ordinary outcome (someone commented "@tec" on an issue that just got
+    # worked), not a failure — the job simply has nothing to run.
+    if: needs.queue.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      # THE QUEUE. `max-parallel: 1` is what makes it a queue rather than a fan-out: GitHub
+      # starts these in the order listed, and the list is oldest-issue-first.
+      max-parallel: 1
+      # One issue TEC can't finish must not cancel the ones queued behind it.
+      fail-fast: false
+      matrix:
+        issue: ${{ fromJson(needs.queue.outputs.issues) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Which service serves AGENT_MODEL, and therefore which API key secret this run spends.
+      # "openrouter" (free tier) or "minimax" (your own paid MiniMax account). Set it with an
+      # AGENT_PROVIDER repo/environment variable, or from the MIA app's model picker, which
+      # rewrites this default and the AGENT_MODEL ones together — they must always agree.
+      AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
+      ISSUE_NUMBER: ${{ matrix.issue }}
+      # The issue's title and body are untrusted user input. They are never carried in a YAML
+      # expression or a step output — the claim step writes them to $RUNNER_TEMP/issue-title.txt
+      # and issue-body.txt, and every later step reads them with `cat`, so nothing can be
+      # interpolated into a shell. (These paths can't be job-level env vars: the `runner`
+      # context isn't available there.)
+    steps:
+      # Take the issue out of the queue before doing anything with it: `by-agent` off,
+      # `agent-running` on. Whatever happens next, this issue is not handed to a second run.
+      - name: Claim the issue
+        id: claim
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          issue="$(gh issue view "$ISSUE_NUMBER" --json state,labels,title,body)"
+          state="$(printf '%s' "$issue" | jq -r '.state')"
+          queued="$(printf '%s' "$issue" | jq -r '[.labels[].name] | index("by-agent") != null')"
+          # It was queued when the list was built; if it isn't now, a human closed it or took
+          # the label off while the run was waiting. Their call, not ours.
+          if [ "$state" != "OPEN" ] || [ "$queued" != "true" ]; then
+            echo "::notice::#$ISSUE_NUMBER is no longer queued — skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$issue" | jq -r '.title' > "${RUNNER_TEMP}/issue-title.txt"
+          printf '%s' "$issue" | jq -r '.body // ""' > "${RUNNER_TEMP}/issue-body.txt"
+          gh issue edit "$ISSUE_NUMBER" --remove-label by-agent --add-label agent-running
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
       - name: Checkout default branch
+        if: steps.claim.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
           fetch-depth: 0
 
       - name: Set up JDK 17
+        if: steps.claim.outputs.skip != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Node 20
+        if: steps.claim.outputs.skip != 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install OpenCode CLI
+        if: steps.claim.outputs.skip != 'true'
         run: npm install -g opencode-ai
 
       - name: Acknowledge the request
+        if: steps.claim.outputs.skip != 'true'
         run: |
           gh issue comment "$ISSUE_NUMBER" \
-            --body "🛠️ **TEC** picked this up — implementing the change and opening a pull request. Watch the [run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." || true
+            --body "🛠️ **TEC** picked this up from the queue — implementing the change and opening a pull request. Watch the [run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." || true
 
       - name: Build the prompt
+        if: steps.claim.outputs.skip != 'true'
         run: |
           {
             echo "You are TEC, an autonomous senior engineer working inside a GitHub Actions runner."
@@ -86,9 +205,9 @@ jobs:
             echo "Make the smallest correct change that resolves the issue and keep the project building."
             echo
             echo "Issue #${ISSUE_NUMBER}"
-            echo "Title: ${ISSUE_TITLE}"
+            echo "Title: $(cat "${RUNNER_TEMP}/issue-title.txt")"
             echo "Body:"
-            echo "${ISSUE_BODY}"
+            cat "${RUNNER_TEMP}/issue-body.txt"
           } > "${RUNNER_TEMP}/agent-prompt.txt"
 
       # OpenRouter's credit counter, sampled either side of the run. The delta is what this one
@@ -96,6 +215,9 @@ jobs:
       # breakdown can be parsed. A free model (a `:free` id) legitimately moves it by $0.
       - name: Read OpenRouter credits (before)
         id: credits_before
+        # Only OpenRouter has this endpoint. On any other provider the samples are simply not
+        # taken and token-usage.js reads the empty values as "cost unknown".
+        if: steps.claim.outputs.skip != 'true' && env.AGENT_PROVIDER == 'openrouter'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -104,27 +226,48 @@ jobs:
           usage="$(node -e 'try{process.stdout.write(String(JSON.parse(process.argv[1]).data.usage))}catch{}' "$body" || true)"
           echo "usage=$usage" >> "$GITHUB_OUTPUT"
 
-      # OpenCode reads OPENROUTER_API_KEY automatically (no interactive `opencode auth login`).
-      # Models are addressed "provider/model" and OpenCode splits on the FIRST "/", so
+      # OpenCode reads each provider's key from its own env var (OPENROUTER_API_KEY,
+      # MINIMAX_API_KEY) — no interactive `opencode auth login`. Models are addressed
+      # "provider/model" and OpenCode splits on the FIRST "/", so
       # `openrouter/minimax/minimax-m3:free` means provider=openrouter,
-      # model=minimax/minimax-m3:free. That model is free (no charge for prompt or completion
-      # tokens) with a 1M-token context and tool calling — which OpenCode needs to edit files at
-      # all. It replaced stealth/ox-alpha, which OpenRouter withdrew: any free endpoint can be
-      # rate limited or pulled without notice, and prompts/completions may be logged depending on
-      # your OpenRouter privacy settings, so don't send it anything secret; override with an
-      # AGENT_MODEL repo/environment variable to switch.
+      # model=minimax/minimax-m3:free, while `minimax/MiniMax-M3` means provider=minimax,
+      # model=MiniMax-M3.
+      #
+      # The default is free (no charge for prompt or completion tokens) with a 1M-token context
+      # and tool calling — which OpenCode needs to edit files at all. It replaced
+      # stealth/ox-alpha, which OpenRouter withdrew: any free endpoint can be rate limited or
+      # pulled without notice, and prompts/completions may be logged depending on your OpenRouter
+      # privacy settings, so don't send it anything secret.
+      #
+      # `minimax/MiniMax-M3` is the same model served first-party against your own paid MiniMax
+      # account: it costs real money per run, and in exchange it does not share the free tier's
+      # daily request cap. Switch with the MIA app's per-project model picker, or by hand with
+      # AGENT_MODEL + AGENT_PROVIDER repo/environment variables — both, always together.
       # The step degrades cleanly on a 429 instead of failing red.
       - name: Run OpenCode CLI
         id: agent
+        if: steps.claim.outputs.skip != 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Optional spare key. Free-tier OpenRouter keys are capped per day, so without one a
           # single exhausted key stops TEC outright until the quota resets.
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          # Read only when AGENT_PROVIDER is "minimax". The MIA app pushes it alongside the
+          # OpenRouter one, so switching provider needs no visit to GitHub's own settings.
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
         run: |
           set -o pipefail
-          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
+          # "Is a key configured" depends on which provider AGENT_MODEL names.
+          if [ "$AGENT_PROVIDER" = "minimax" ]; then
+            if [ -z "$MINIMAX_API_KEY" ]; then
+              echo "status=nokey" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # A paid account has no spare-key dance: one key, one attempt. Blanking it here is
+            # what keeps the retry block below inert without a second provider branch in it.
+            OPENROUTER_API_KEY_FALLBACK=""
+          elif [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
             echo "status=nokey" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -156,7 +299,9 @@ jobs:
             return 1
           }
 
-          if [ -n "$OPENROUTER_API_KEY" ]; then
+          # The "start on the spare" case is OpenRouter-only: every other provider has exactly
+          # one key and has already been checked to hold it.
+          if [ "$AGENT_PROVIDER" != "openrouter" ] || [ -n "$OPENROUTER_API_KEY" ]; then
             run_agent
             rc=$?
           else
@@ -182,7 +327,7 @@ jobs:
 
       - name: Read OpenRouter credits (after)
         id: credits_after
-        if: steps.agent.outputs.status != 'nokey'
+        if: steps.claim.outputs.skip != 'true' && steps.agent.outputs.status != 'nokey'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           USED_FALLBACK: ${{ steps.agent.outputs.used_fallback }}
@@ -203,7 +348,7 @@ jobs:
       # wall or a broken build still tells the user what the attempt cost. Also leaves
       # token-report.md / token-trailer.txt behind for the PR body and the commit message.
       - name: Report token spend
-        if: steps.agent.outputs.status != 'nokey'
+        if: steps.claim.outputs.skip != 'true' && steps.agent.outputs.status != 'nokey'
         env:
           OPENCODE_LOG: ${{ runner.temp }}/opencode-output.log
           REPORT_FILE: ${{ runner.temp }}/token-report.md
@@ -223,10 +368,14 @@ jobs:
             echo "No .github/scripts/token-usage.js in this repo; skipping the spend report."
           fi
 
-      - name: Report missing OpenRouter key
+      - name: Report missing model API key
         if: steps.agent.outputs.status == 'nokey'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
+          if [ "$AGENT_PROVIDER" = "minimax" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: this repo is set to a MiniMax model but no `MINIMAX_API_KEY` Actions secret is set.\n\nAdd your MiniMax API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `MINIMAX_API_KEY`, then comment `@tec` again (or tap Re-do in the app) to put this issue back in the queue.'
+          else
+            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or tap Re-do in the app) to put this issue back in the queue.'
+          fi
           exit 1
 
       # Free-tier rate/quota exhaustion is expected, not a bug: comment and pass green so the
@@ -234,7 +383,7 @@ jobs:
       - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the provider\'s quota/rate limit was hit (HTTP 429) — on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, add OpenRouter credit, or switch this repo to MiniMax M3 on your own MiniMax account (`AGENT_PROVIDER=minimax`, `AGENT_MODEL=minimax/MiniMax-M3`, plus a `MINIMAX_API_KEY` secret — the MIA app\'s model picker sets all three). Then comment `@tec` again to re-queue it.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'
@@ -267,6 +416,7 @@ jobs:
         run: exit 1
 
       - name: Open a PR, merge it, and report back
+        id: land
         if: steps.agent.outputs.status == 'ok'
         run: |
           # OpenCode keeps session state under $HOME, but drop any stray in-repo artifacts.
@@ -274,6 +424,7 @@ jobs:
           git config user.name "mia-agent[bot]"
           git config user.email "mia-agent[bot]@users.noreply.github.com"
 
+          ISSUE_TITLE="$(cat "${RUNNER_TEMP}/issue-title.txt")"
           BRANCH="tec/issue-${ISSUE_NUMBER}"
           git checkout -b "$BRANCH"
           git add -A
@@ -322,7 +473,7 @@ jobs:
           done
 
           if [ -n "$merged" ]; then
-            gh issue edit "$ISSUE_NUMBER" --remove-label "by-agent" --add-label "done" || true
+            echo "merged=true" >> "$GITHUB_OUTPUT"
             gh issue comment "$ISSUE_NUMBER" \
               --body "✅ TEC implemented this and squash-merged ${PR_URL:-the pull request} into \`${DEFAULT_BRANCH}\`."
           elif [ -n "$PR_URL" ]; then
@@ -331,4 +482,18 @@ jobs:
           else
             NO_PR_BODY="$(printf '🛑 TEC prepared changes on branch `%s` but could not open a pull request.\n\nIf Actions is not allowed to open PRs here, enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, then comment `@tec` again.' "$BRANCH")"
             gh issue comment "$ISSUE_NUMBER" --body "$NO_PR_BODY"
+          fi
+
+      # Always releases the slot this issue holds, however the steps above ended — an issue left
+      # wearing `agent-running` after the run is over would read as "still being worked" forever.
+      # It is deliberately NOT put back on `by-agent`: an automatic retry of a failing issue
+      # would spin the queue and burn the model quota. Re-queue it by hand ("@tec …", or Re-do
+      # in the MIA app), once you know why it stopped.
+      - name: Release the queue slot
+        if: always() && steps.claim.outputs.skip != 'true'
+        run: |
+          if [ "${{ steps.land.outputs.merged }}" = "true" ]; then
+            gh issue edit "$ISSUE_NUMBER" --remove-label agent-running --add-label done || true
+          else
+            gh issue edit "$ISSUE_NUMBER" --remove-label agent-running --add-label agent-failed || true
           fi

@@ -1,6 +1,7 @@
 package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.ActionType
+import ir.mahditavakoli.mia.network.openrouter.ChatCompleter
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionRequest
 import ir.mahditavakoli.mia.network.openrouter.ChatCompletionResponse
 import ir.mahditavakoli.mia.network.openrouter.ChatMessage
@@ -59,7 +60,7 @@ class OxTextIntentClassifierTest {
         HttpException(Response.error<Unit>(code, "".toResponseBody(null)))
 
     private fun classifier(api: OpenRouterApi) = OxTextIntentClassifier(
-        api = api,
+        api = ChatCompleter(api::chatCompletion),
         json = json,
         apiKeyProvider = { "primary" },
         fallbackApiKeyProvider = { "spare" }
@@ -126,7 +127,7 @@ class OxTextIntentClassifierTest {
         val api = FakeOpenRouterApi(listOf(Result.failure(httpError(429))))
 
         val result = OxTextIntentClassifier(
-            api = api,
+            api = ChatCompleter(api::chatCompletion),
             json = json,
             apiKeyProvider = { "primary" }
         ).classify("یه پروژه وبسایت بساز")
