@@ -7,8 +7,8 @@
 # fails. This rewrites the id in place, in every repo that still carries a dead one.
 #
 # Setting an AGENT_MODEL Actions *variable* is not enough on its own: TEC reads it through
-# OpenCode and needs the `openrouter/` prefix, while the PO/QC script sends it straight to the
-# OpenRouter API and must not have one. A single variable cannot satisfy both, so the files are
+# OpenCode and needs the provider prefix, while the PO/QC script sends it straight to the
+# provider's API and must not have one. A single variable cannot satisfy both, so the files are
 # what get fixed.
 #
 # Usage:
@@ -17,6 +17,14 @@
 #   ./migrate-agent-model.sh --dry-run --all               # show what would change
 #   TO=z-ai/glm-5.2:free ./migrate-agent-model.sh --all    # a different target model
 #   FROM=some/old-model ./migrate-agent-model.sh --all     # one specific id instead of the list
+#   TO=MiniMax-M3 PROVIDER=minimax ./migrate-agent-model.sh --all   # move to a paid MiniMax account
+#
+# PROVIDER must match TO: it is the prefix OpenCode gets (`openrouter/` vs `minimax/`) and the
+# `AGENT_PROVIDER` default the files carry. Repos bootstrapped before MiniMax support have no
+# AGENT_PROVIDER default at all, so this script adds nothing there and they keep calling
+# OpenRouter — for those, copy docs/github/workflows/ + docs/github/scripts/ over the repo's
+# .github/ instead, which is the refresh described below. A MiniMax target also needs a
+# MINIMAX_API_KEY Actions secret on each repo; this script does not touch secrets.
 #
 # Only the model id is rewritten; prose comments around it were written about the old model and
 # are left alone. To refresh a repo completely instead, copy docs/github/workflows/ and
@@ -28,6 +36,8 @@
 set -euo pipefail
 
 TO="${TO:-minimax/minimax-m3:free}"
+# The service TO lives on: the OpenCode prefix, and the AGENT_PROVIDER default written below.
+PROVIDER="${PROVIDER:-openrouter}"
 # Every model MIA has defaulted to and OpenRouter has since withdrawn, newest first.
 if [ -n "${FROM:-}" ]; then
   FROMS=("$FROM")
@@ -57,9 +67,12 @@ if [ ${#repos[@]} -eq 0 ]; then
   exit 2
 fi
 
-# `openrouter/<id>` (OpenCode's provider/model form) and the bare `<id>` (the raw OpenRouter API
+# `openrouter/<id>` (OpenCode's provider/model form) and the bare `<id>` (the raw provider API
 # form) both appear, so the prefixed one is parked behind a placeholder while the bare one is
 # replaced — otherwise the second pass would rewrite the tail of the first.
+#
+# Any AGENT_PROVIDER default present is repointed too, so the prefix and the provider name can
+# never drift apart. Files without one are left as they are; see the header.
 rewrite() {
   local body; body="$(cat)"
   local from
@@ -67,8 +80,11 @@ rewrite() {
     body="$(printf '%s' "$body" | sed \
       -e "s|openrouter/${from}|@@PREFIXED@@|g" \
       -e "s|${from}|${TO}|g" \
-      -e "s|@@PREFIXED@@|openrouter/${TO}|g")"
+      -e "s|@@PREFIXED@@|${PROVIDER}/${TO}|g")"
   done
+  body="$(printf '%s' "$body" | sed \
+    -e "s#\(vars\.AGENT_PROVIDER *|| *'\)[^']*\('\)#\1${PROVIDER}\2#g" \
+    -e "s#\(process\.env\.AGENT_PROVIDER *|| *\"\)[^\"]*\(\"\)#\1${PROVIDER}\2#g")"
   printf '%s' "$body"
 }
 

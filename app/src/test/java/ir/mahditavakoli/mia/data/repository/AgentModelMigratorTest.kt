@@ -1,7 +1,9 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -175,4 +177,122 @@ class AgentModelMigratorTest {
     fun `a repo with none of the files reports no current model`() = runBlocking {
         assertNull(migrator(FakeGitHubApi()).currentModel("octocat", "repo"))
     }
+
+    // --- provider awareness ---------------------------------------------------------------
+    //
+    // A model can now be reached through more than one service, so a file names both an id and
+    // the provider that serves it. These cover the pair moving together, and the one genuinely
+    // ambiguous id in the set.
+
+    /** The current shape: an AGENT_PROVIDER default next to each AGENT_MODEL one. */
+    private val providerAwareWorkerYml = """
+        jobs:
+          tec:
+            env:
+              AGENT_PROVIDER: ${'$'}{{ vars.AGENT_PROVIDER || 'openrouter' }}
+            steps:
+              - name: Run OpenCode CLI
+                env:
+                  AGENT_MODEL: ${'$'}{{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
+    """.trimIndent()
+
+    private val providerAwareRoleReviewJs = """
+        const model = process.env.AGENT_MODEL || "minimax/minimax-m3:free";
+        const providerId = process.env.AGENT_PROVIDER || "openrouter";
+    """.trimIndent()
+
+    @Test
+    fun `switching to MiniMax moves the model and the provider together`() = runBlocking {
+        val api = FakeGitHubApi().apply {
+            contents[".github/workflows/agent-issue-worker.yml"] = providerAwareWorkerYml
+            contents[".github/scripts/ai-role-review.js"] = providerAwareRoleReviewJs
+        }
+
+        val outcome = migrator(api).setModel("octocat", "repo", "MiniMax-M3")
+
+        // OpenCode gets provider + model; the direct-API script gets the bare id. Both files
+        // must also agree on AGENT_PROVIDER, or one of them spends the wrong key.
+        val yml = api.written(".github/workflows/agent-issue-worker.yml")
+        assertTrue(yml.contains("vars.AGENT_MODEL || 'minimax/MiniMax-M3' }}"))
+        assertTrue(yml.contains("vars.AGENT_PROVIDER || 'minimax' }}"))
+
+        val js = api.written(".github/scripts/ai-role-review.js")
+        assertTrue(js.contains("process.env.AGENT_MODEL || \"MiniMax-M3\";"))
+        assertTrue(js.contains("process.env.AGENT_PROVIDER || \"minimax\";"))
+
+        assertEquals(AgentProvider.MINIMAX, outcome.provider)
+        assertTrue(outcome.withoutProvider.isEmpty())
+    }
+
+    @Test
+    fun `the OpenRouter id that looks provider-qualified is still written bare`() = runBlocking {
+        // `minimax/minimax-m3:free` is a *model id* on OpenRouter, not a provider/model pair —
+        // the one case where deciding "is this qualified?" by looking for a slash gets it wrong,
+        // and would leave the PO/QC script calling a model named "minimax-m3:free".
+        val api = FakeGitHubApi().apply {
+            contents[".github/scripts/ai-role-review.js"] = providerAwareRoleReviewJs
+            contents[".github/workflows/agent-issue-worker.yml"] = providerAwareWorkerYml
+        }
+
+        migrator(api).setModel("octocat", "repo", "MiniMax-M3")
+        // Now back again — the return trip is where a bad round-trip would surface.
+        val api2 = FakeGitHubApi().apply {
+            contents[".github/scripts/ai-role-review.js"] =
+                api.written(".github/scripts/ai-role-review.js")
+            contents[".github/workflows/agent-issue-worker.yml"] =
+                api.written(".github/workflows/agent-issue-worker.yml")
+        }
+        migrator(api2).setModel("octocat", "repo", "minimax/minimax-m3:free")
+
+        assertTrue(
+            api2.written(".github/scripts/ai-role-review.js")
+                .contains("process.env.AGENT_MODEL || \"minimax/minimax-m3:free\";")
+        )
+        assertTrue(
+            api2.written(".github/workflows/agent-issue-worker.yml")
+                .contains("vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}")
+        )
+    }
+
+    @Test
+    fun `currentModel strips a MiniMax provider prefix`() = runBlocking {
+        val api = FakeGitHubApi().apply {
+            contents[".github/workflows/agent-issue-worker.yml"] =
+                "AGENT_MODEL: ${'$'}{{ vars.AGENT_MODEL || 'minimax/MiniMax-M3' }}"
+        }
+
+        // Comparable with an AgentModel.id, so the picker can preselect the row it is on.
+        assertEquals("MiniMax-M3", migrator(api).currentModel("octocat", "repo"))
+    }
+
+    @Test
+    fun `an older repo without AGENT_PROVIDER is flagged, not silently half-migrated`() =
+        runBlocking {
+            // The model lands, but these files have no provider default to carry it — they will
+            // keep calling OpenRouter with a MiniMax id. The UI has to be able to say so.
+            val api = FakeGitHubApi().apply {
+                contents[".github/scripts/ai-role-review.js"] = roleReviewJs
+            }
+
+            val outcome = migrator(api).setModel("octocat", "repo", "MiniMax-M3")
+
+            assertTrue(outcome.didChange)
+            assertEquals(listOf(".github/scripts/ai-role-review.js"), outcome.withoutProvider)
+            assertTrue(outcome.needsProviderAwareFiles)
+        }
+
+    @Test
+    fun `staying on OpenRouter never reports a provider shortfall`() = runBlocking {
+        // Same old files, but the target is served by the provider they already assume — so
+        // there is nothing missing and nothing to warn about.
+        val api = FakeGitHubApi().apply {
+            contents[".github/scripts/ai-role-review.js"] = roleReviewJs
+        }
+
+        val outcome = migrator(api).setModel("octocat", "repo", "z-ai/glm-5.2:free")
+
+        assertEquals(listOf(".github/scripts/ai-role-review.js"), outcome.withoutProvider)
+        assertFalse(outcome.needsProviderAwareFiles)
+    }
+
 }

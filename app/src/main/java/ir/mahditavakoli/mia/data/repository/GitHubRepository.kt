@@ -9,6 +9,8 @@ import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.providerFor
 import kotlin.math.absoluteValue
 
 /**
@@ -21,8 +23,8 @@ import kotlin.math.absoluteValue
  * skip GitHub entirely.
  *
  * Creating a repo also wires it up to the OpenCode CI agent via [RepoBootstrapper] (workflow
- * file, labels, `OPENROUTER_API_KEY` secret), and agent-handled tasks are opened already
- * labeled `by-agent` so the workflow fires immediately.
+ * file, labels, the `OPENROUTER_API_KEY` / `MINIMAX_API_KEY` secrets), and agent-handled tasks
+ * are opened already labeled `by-agent` so the workflow fires immediately.
  */
 class GitHubRepository(
     private val api: GitHubApi,
@@ -38,6 +40,8 @@ class GitHubRepository(
      */
     private val agentApiKeyProvider: () -> String?,
     private val agentFallbackApiKeyProvider: () -> String?,
+    /** The MiniMax platform key, for repos pointed at a first-party MiniMax model. */
+    private val miniMaxApiKeyProvider: () -> String? = { null },
     private val createPrivate: Boolean = true
 ) {
     // The authenticated user's login, resolved once and reused as the repo/issue owner.
@@ -51,7 +55,8 @@ class GitHubRepository(
             description = "Project «$projectName» — managed by MIA",
             private = createPrivate,
             agentApiKey = agentApiKeyProvider(),
-            agentFallbackApiKey = agentFallbackApiKeyProvider()
+            agentFallbackApiKey = agentFallbackApiKeyProvider(),
+            miniMaxApiKey = miniMaxApiKeyProvider()
         )
     }
 
@@ -227,12 +232,50 @@ class GitHubRepository(
         agentModelMigrator.currentModel(owner(), repoNameFor(projectName))
     }
 
-    /** Repoints this project's repo at [model]. See [AgentModelMigrator] for what that rewrites. */
+    /**
+     * Repoints this project's repo at [model]. See [AgentModelMigrator] for what that rewrites.
+     *
+     * The rewrite is preceded by making sure the repo actually holds the API key that model
+     * needs: pointing a repo at a MiniMax model without a `MINIMAX_API_KEY` secret would produce
+     * a clean-looking commit and then fail on the next `@tec`, which is the worst of both. The
+     * key push is best-effort and its failure is folded into the outcome as a warning rather
+     * than aborting the change — a repo whose secrets MIA cannot write can still have the secret
+     * added by hand on GitHub.
+     */
     suspend fun setAgentModel(
         projectName: String,
         model: String
     ): Result<AgentModelMigrator.Outcome> = runCatching {
-        agentModelMigrator.setModel(owner(), repoNameFor(projectName), model)
+        val owner = owner()
+        val repo = repoNameFor(projectName)
+        val provider = providerFor(model)
+        val secretWarning = ensureProviderSecret(owner, repo, provider)
+        val outcome = agentModelMigrator.setModel(owner, repo, model)
+        if (secretWarning == null) outcome else outcome.copy(failed = outcome.failed + secretWarning)
+    }
+
+    /**
+     * Pushes [provider]'s API key to the repo, returning null on success (or when there is
+     * nothing to do) and a `path to reason` pair the outcome can report otherwise.
+     *
+     * Only the non-default providers are pushed here. OpenRouter's key is written at bootstrap
+     * and re-pushing it on every model change would spend a GitHub write for nothing.
+     */
+    private suspend fun ensureProviderSecret(
+        owner: String,
+        repo: String,
+        provider: AgentProvider
+    ): Pair<String, String>? {
+        if (provider == AgentProvider.DEFAULT) return null
+        val key = when (provider) {
+            AgentProvider.MINIMAX -> miniMaxApiKeyProvider()
+            AgentProvider.OPENROUTER -> agentApiKeyProvider()
+        }
+        if (key.isNullOrBlank()) {
+            return provider.secretName to "کلید ${provider.label} در تنظیمات وارد نشده است"
+        }
+        return bootstrapper.putProviderSecret(owner, repo, provider, key)
+            .fold(onSuccess = { null }, onFailure = { provider.secretName to (it.message ?: "خطای نامشخص") })
     }
 
     /**

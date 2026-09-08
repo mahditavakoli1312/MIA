@@ -8,6 +8,7 @@ import ir.mahditavakoli.mia.network.github.GitHubRepo
 import ir.mahditavakoli.mia.network.github.PutContentBody
 import ir.mahditavakoli.mia.network.github.PutSecretBody
 import ir.mahditavakoli.mia.network.github.RepoPublicKey
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 
 /** Turns bytes into a base64 string. Abstracted so unit tests avoid `android.util.Base64`. */
 fun interface Base64Encoder {
@@ -42,8 +43,10 @@ data class BootstrapFile(val repoPath: String, val content: String)
  *      already carries them),
  *   3. creates the `by-agent` / `done` labels,
  *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
- *      (the single free-model key that powers CI + PO + TEC + QC), plus the spare key as
- *      `OPENROUTER_API_KEY_FALLBACK` for the workflows to switch to on a 429.
+ *      (the free-model key that powers CI + PO + TEC + QC), plus the spare key as
+ *      `OPENROUTER_API_KEY_FALLBACK` for the workflows to switch to on a 429, and the MiniMax
+ *      key as `MINIMAX_API_KEY` so the repo can be repointed at a paid MiniMax model later
+ *      without the user having to touch GitHub's own Settings.
  *
  * Repo creation is the only hard-failure step; everything after it is best-effort and
  * reported as [Result.warnings] so a half-wired repo still surfaces useful feedback
@@ -66,6 +69,9 @@ class RepoBootstrapper(
      *        the secret step is skipped with a warning (the workflow can't run without it).
      * @param agentFallbackApiKey the spare OpenRouter key the workflows retry on once the
      *        primary one is rate limited. Optional — null/blank just means no second attempt.
+     * @param miniMaxApiKey the MiniMax platform key, stored so that switching this repo to a
+     *        MiniMax model in the picker later just works. Optional and non-fatal: a repo on a
+     *        free OpenRouter model never reads it.
      */
     suspend fun bootstrap(
         owner: String,
@@ -73,7 +79,8 @@ class RepoBootstrapper(
         description: String?,
         private: Boolean,
         agentApiKey: String?,
-        agentFallbackApiKey: String? = null
+        agentFallbackApiKey: String? = null,
+        miniMaxApiKey: String? = null
     ): Result {
         val useTemplate = templateRepo.isNotBlank()
         val repo = if (useTemplate) {
@@ -115,14 +122,16 @@ class RepoBootstrapper(
             }.onFailure { warnings += "label «$label» failed (${it.message})" }
         }
 
-        // 3. OpenRouter API key secrets (used by the OpenCode agent in the workflow). Both are
-        // sealed against the same repo public key, so fetch it once and reuse it.
-        if (agentApiKey.isNullOrBlank()) {
+        // 3. Model API key secrets (used by the OpenCode agent in the workflow). All are sealed
+        // against the same repo public key, so fetch it once and reuse it.
+        if (agentApiKey.isNullOrBlank() && miniMaxApiKey.isNullOrBlank()) {
             warnings += "OPENROUTER_API_KEY not set — add it in Settings so the agent can run"
         } else {
             runCatching {
                 val publicKey = api.getRepoPublicKey(owner, repo.name)
-                putSecret(owner, repo.name, SECRET_NAME, agentApiKey, publicKey)
+                if (!agentApiKey.isNullOrBlank()) {
+                    putSecret(owner, repo.name, SECRET_NAME, agentApiKey, publicKey)
+                }
                 // Optional: without it the workflows just stop at the first 429, as before.
                 if (!agentFallbackApiKey.isNullOrBlank() && agentFallbackApiKey != agentApiKey) {
                     runCatching {
@@ -131,10 +140,36 @@ class RepoBootstrapper(
                         warnings += "setting $FALLBACK_SECRET_NAME secret failed (${it.message})"
                     }
                 }
-            }.onFailure { warnings += "setting OPENROUTER_API_KEY secret failed (${it.message})" }
+                // Also optional: only read once the repo is pointed at a MiniMax model, but
+                // storing it now means that switch is a one-tap change in the picker later.
+                if (!miniMaxApiKey.isNullOrBlank()) {
+                    runCatching {
+                        putSecret(owner, repo.name, MINIMAX_SECRET_NAME, miniMaxApiKey, publicKey)
+                    }.onFailure {
+                        warnings += "setting $MINIMAX_SECRET_NAME secret failed (${it.message})"
+                    }
+                }
+            }.onFailure { warnings += "setting model API key secrets failed (${it.message})" }
         }
 
         return Result(repo, warnings)
+    }
+
+    /**
+     * Stores one provider's API key on an *existing* repo, for the model picker: repointing a
+     * repo at MiniMax is useless if the workflow then finds no `MINIMAX_API_KEY` to spend, and
+     * the user should not have to go to GitHub's own Settings to finish a change MIA started.
+     *
+     * Never throws — a repo whose secrets MIA cannot write (a fork, a revoked token scope) still
+     * gets the file rewrite, and the caller reports the shortfall.
+     */
+    suspend fun putProviderSecret(
+        owner: String,
+        repo: String,
+        provider: AgentProvider,
+        value: String
+    ): kotlin.Result<Unit> = runCatching {
+        putSecret(owner, repo, provider.secretName, value, api.getRepoPublicKey(owner, repo))
     }
 
     private suspend fun putSecret(
@@ -176,6 +211,9 @@ class RepoBootstrapper(
 
         /** The spare key the AI-team workflows retry with when [SECRET_NAME] hits a 429. */
         const val FALLBACK_SECRET_NAME = "OPENROUTER_API_KEY_FALLBACK"
+
+        /** The paid MiniMax platform key, read only by repos pointed at a MiniMax model. */
+        const val MINIMAX_SECRET_NAME = "MINIMAX_API_KEY"
 
         /** GitHub label colors are 6-digit hex without a leading '#'. */
         val LABELS = listOf(

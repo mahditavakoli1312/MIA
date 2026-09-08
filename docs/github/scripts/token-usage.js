@@ -11,6 +11,9 @@
 //      run by the workflow and passed in as USAGE_BEFORE/USAGE_AFTER. That delta is the
 //      authoritative dollar cost even when no tokens could be parsed — it is what OpenRouter
 //      actually billed. On a free model (a `:free` id) it is legitimately $0.
+//      Only OpenRouter has that endpoint: on any other provider the workflow skips the samples,
+//      both values arrive empty, and source 1 is the only one — which is fine, because OpenCode
+//      reports a per-message `cost` for priced providers.
 //
 // Nothing here is allowed to fail the job: a run that produced a working PR must not go red
 // because accounting was unavailable. Every failure path degrades to a shorter report.
@@ -19,9 +22,12 @@ const fs = require("fs");
 
 const logPath = process.env.OPENCODE_LOG || "";
 const model = process.env.AGENT_MODEL || "unknown";
+const providerId = process.env.AGENT_PROVIDER || "openrouter";
 // Free tiers are spelled two ways on OpenRouter: a `:free` suffix, and the stealth models,
-// which carry no suffix but still bill nothing.
-const isFreeModel = (id) => id.includes(":free") || id.includes("stealth/");
+// which carry no suffix but still bill nothing. Nothing on a paid provider is ever free, so a
+// reported $0 there means "not measured", not "cost nothing" — see buildReport.
+const isFreeModel = (id) =>
+  providerId === "openrouter" && (id.includes(":free") || id.includes("stealth/"));
 const status = process.env.AGENT_STATUS || "ok";
 const issueNumber = process.env.ISSUE_NUMBER;
 const repo = process.env.REPO; // "owner/name"
@@ -215,7 +221,13 @@ function buildReport(totals, calls, cost, models) {
   if (cost === null) {
     parts.push("cost not reported");
   } else if (cost === 0) {
-    parts.push(isFreeModel(model) ? "cost **$0.00** (free model)" : "cost **$0.00**");
+    parts.push(
+      isFreeModel(model)
+        ? "cost **$0.00** (free model)"
+        : providerId === "openrouter"
+          ? "cost **$0.00**"
+          : "cost not reported"
+    );
   } else {
     parts.push(`cost **$${cost.toFixed(4)}**`);
   }

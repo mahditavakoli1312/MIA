@@ -2,6 +2,7 @@ package ir.mahditavakoli.mia.ui.main
 
 import ir.mahditavakoli.mia.data.model.IssueCounts
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 
 sealed interface RecordingState {
     data object Idle : RecordingState
@@ -81,6 +82,10 @@ data class MainUiState(
     val openRouterApiKey: String = "",
     /** The spare OpenRouter key, used only once the primary one is rate limited/out of credit. */
     val openRouterFallbackApiKey: String = "",
+    /** What the user last saved as the MiniMax platform key (empty if none). */
+    val miniMaxApiKey: String = "",
+    /** Which model the app's own typed commands run on — a device preference, not a repo one. */
+    val textModelId: String = DEFAULT_TEXT_MODEL,
     /** False without a GitHub token — the per-project model picker has nothing to talk to. */
     val isGitHubConfigured: Boolean = false,
     /** Non-null while the model picker is open for one project. */

@@ -327,12 +327,24 @@ JSON دقیق بدهد، در هر دو کار بدترین نتیجه‌اش ر
 
 **نکات پیاده‌سازی:**
 
-- **مدل:** `minimax/minimax-m3:free` (ثابت `DEFAULT_TEXT_MODEL`) — همان مدل رایگانی که ایجنت‌های CI
-  روی آن کار می‌کنند. اندپوینت سازگار با OpenAI: `POST v1/chat/completions`. جایگزین
+- **مدل:** پیش‌فرض `minimax/minimax-m3:free` (ثابت `DEFAULT_TEXT_MODEL`) — همان مدل رایگانی که
+  ایجنت‌های CI روی آن کار می‌کنند. اندپوینت سازگار با OpenAI: `POST v1/chat/completions`. جایگزین
   `stealth/ox-alpha` شد که OpenRouter آن را حذف کرد؛ نام ثابت عمداً به نقش اشاره می‌کند نه به مدل،
   تا تعویض بعدی فقط یک خط باشد.
-- **کلید:** همان کلید OpenRouter از `SecretStore` که به مخازن هم به‌عنوان `OPENROUTER_API_KEY` فرستاده
-  می‌شود؛ **در هر فراخوانی** به‌صورت هدر `Authorization` می‌رود تا تغییر کلید در تنظیمات فوراً اثر کند.
+- **انتخاب مدل در «تنظیمات»:** کاربر می‌تواند هر یک از `AGENT_MODEL_CHOICES` را برای همین خط لوله
+  انتخاب کند (`SecretStore.textModelId`)، از جمله `MiniMax-M3` روی حساب پولی خودش. این انتخاب
+  **فقط برای پردازش داخل اپ** است و هیچ مخزنی را دست نمی‌زند — آن کار با انتخاب‌گر مدلِ کارت پروژه
+  انجام می‌شود. `OxTextIntentClassifier` در هر دستور از نو ساخته می‌شود تا تغییر تنظیمات از
+  **همان دستور بعدی** اثر کند، نه از اجرای بعدی برنامه.
+- **سرویس:** `AgentProvider` تعیین می‌کند درخواست به کدام هاست برود و کدام کلید خرج شود —
+  OpenRouter (`v1/chat/completions`) یا MiniMax (`v1/text/chatcompletion_v2`). مسیر MiniMax عمداً
+  اندپوینت `chatcompletion_v2` را می‌گیرد: مسیر ساده‌ترِ `chat/completions` فکرِ مدل را داخل
+  `content` و بین `<think>…</think>` برمی‌گرداند، اما این یکی آن را در فیلد جدای
+  `reasoning_content` می‌گذارد که همان چیزی است که `reasoning.exclude` در OpenRouter می‌سازد.
+- **کلید:** همان کلید سرویسِ انتخاب‌شده از `SecretStore` (`OPENROUTER_API_KEY` یا `MINIMAX_API_KEY`)
+  که به مخازن هم فرستاده می‌شود؛ **در هر فراخوانی** به‌صورت هدر `Authorization` می‌رود تا تغییر کلید
+  در تنظیمات فوراً اثر کند. کلید پشتیبان فقط برای OpenRouter معنا دارد — سهمیهٔ رایگان است که
+  تمام می‌شود، نه یک حساب پولی.
 - **`response_format`:** فقط برای مرحلهٔ ۳ فرستاده می‌شود و nullable است (اندپوینت‌های رایگان
   لزوماً structured output ندارند). به‌همین‌دلیل `IntentJson` هم حصار ```json و هم متن اضافهٔ اطراف
   JSON را جدا می‌کند — این تابع بین هر دو مسیر مشترک است.
@@ -401,7 +413,7 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
    - `.github/workflows/add-to-project.yml` — افزودن خودکار ایشوها به برد GitHub Projects
    - `.github/workflows/ci.yml` — یکپارچه‌سازی پیوسته (build)
 3. **ساخت برچسب‌ها:** `by-agent` (آبی) و `done` (سبز). کد ۴۲۲ (برچسب از قبل وجود دارد) قابل‌قبول است.
-4. **ذخیرهٔ کلید OpenRouter** به‌عنوان Secret اکشنز با نام `OPENROUTER_API_KEY` — همان **یک کلید رایگان** که هر چهار ایجنت (CI/PO/TEC/QC) با آن اجرا می‌شوند.
+4. **ذخیرهٔ کلیدهای مدل** به‌عنوان Secret اکشنز: `OPENROUTER_API_KEY` — همان **یک کلید رایگان** که هر چهار ایجنت (CI/PO/TEC/QC) با آن اجرا می‌شوند — و در صورت وجود، `OPENROUTER_API_KEY_FALLBACK` و `MINIMAX_API_KEY` (دومی تا سوئیچ بعدی به مدل پولی فقط یک انتخاب در اپ باشد).
 
 مراحل ۲ تا ۴ «بهترین‌تلاش» هستند؛ اگر هرکدام خطا بدهند، به‌جای شکست کامل، در فهرست `warnings` گزارش
 می‌شوند و کاربر پیام هشدار می‌بیند (مثلاً «هشدار پیکربندی ایجنت: ...»).
@@ -518,15 +530,18 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
   که هنوز gradlew ندارند، این مرحله بی‌خطر رد می‌شود).
 - **ایجنت git نمی‌زند:** ایجنت فقط فایل‌ها را ویرایش می‌کند؛ commit، ساخت شاخه، باز کردن PR و merge را خودِ
   ورک‌فلو با `gh` انجام می‌دهد.
-- **انتخاب مدل:** مدل با متغیر `AGENT_MODEL` قابل تغییر است؛ پیش‌فرض
-  `openrouter/minimax/minimax-m3:free` است. OpenCode رشتهٔ مدل را روی نخستین `/` جدا می‌کند، پس این
+- **انتخاب مدل:** مدل با متغیرهای `AGENT_MODEL` + `AGENT_PROVIDER` قابل تغییر است (همیشه با هم)؛
+  پیش‌فرض `openrouter/minimax/minimax-m3:free` روی `openrouter` است. گزینهٔ پولی
+  `minimax/MiniMax-M3` روی `minimax` همان مدل است بدون سقف روزانهٔ رایگان. OpenCode رشتهٔ مدل را روی نخستین `/` جدا می‌کند، پس این
   یعنی provider=openrouter و model=minimax/minimax-m3:free — یک مدل رایگان با کانتکست ۱ میلیون توکن
   که **tool calling** دارد (بدون آن OpenCode اصلاً نمی‌تواند فایل ویرایش کند). جایگزین
   `stealth/ox-alpha` شد که OpenRouter حذفش کرد؛ هر اندپوینت رایگانی می‌تواند بدون اطلاع قبلی محدود
   یا حذف شود و بسته به تنظیمات حریم خصوصی حساب، پرامپت/پاسخ‌ها ممکن است لاگ شوند. ورک‌فلو هنگام
   برخورد به خطای 429 به‌جای شکست قرمز، فقط یک کامنت می‌گذارد و سبز عبور می‌کند.
-- ایجنت به Secret به نام `OPENROUTER_API_KEY` (همان کلیدی که MIA در مخزن ذخیره کرده) نیاز دارد؛ کلید رایگان
-  OpenRouter کافی است. اگر این Secret تنظیم نشده باشد، ورک‌فلو یک کامنت راهنما می‌گذارد.
+- ایجنت به Secret کلیدِ سرویس جاری نیاز دارد — `OPENROUTER_API_KEY` یا (وقتی
+  `AGENT_PROVIDER=minimax` است) `MINIMAX_API_KEY`. هر دو را MIA خودش در مخزن ذخیره می‌کند و کلید
+  رایگان OpenRouter برای حالت پیش‌فرض کافی است. اگر Secret موردنیاز تنظیم نشده باشد، ورک‌فلو یک
+  کامنت راهنما می‌گذارد که **همان** کلید را نام می‌برد.
 - **گزارش مصرف توکن:** هر اجرا هزینهٔ خودش را روی همان ایشو کامنت می‌کند و تریلر `Token-Spend:` را روی
   کامیت می‌گذارد. این مرحله عمداً **قبل از** مراحلی است که می‌توانند جاب را شکست بدهند، تا حتی وقتی
   سقف رایگان خورده یا build شکسته، هزینهٔ تلاش معلوم باشد. ← [حساب‌وکتاب توکن](token-usage.md)
@@ -555,15 +570,20 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
         ▼
  1) GitHubRepository.agentModelFor(projectName)
         │      repoNameFor(نام پروژه) → GET .github/workflows/agent-issue-worker.yml
-        │      شناسهٔ مدل از داخل AGENT_MODEL خوانده و پیشوند openrouter/ حذف می‌شود
+        │      شناسهٔ مدل از داخل AGENT_MODEL خوانده و پیشوند سرویس حذف می‌شود
         │      → «مدل فعلی: …» بالای دیالوگ
         ▼
  2) کاربر یکی از AGENT_MODEL_CHOICES را انتخاب می‌کند (پیش‌فرض: MiniMax M3 رایگان)
         ▼
- 3) AgentModelMigrator.setModel(owner, repo, model)
-        │      برای هر یک از سه فایل: GET → بازنویسیِ فقط مقدار پیش‌فرض AGENT_MODEL → PUT با sha
+ 3) اگر مدل سرویسی غیر از OpenRouter بخواهد: RepoBootstrapper.putProviderSecret(...)
+        │      کلید همان سرویس (مثلاً MINIMAX_API_KEY) روی مخزن ذخیره می‌شود
         ▼
- Outcome(updated, unchanged, missing, withoutModel, failed) → یک پیام فارسی در Snackbar
+ 4) AgentModelMigrator.setModel(owner, repo, model)
+        │      برای هر یک از سه فایل: GET → بازنویسیِ پیش‌فرض‌های AGENT_MODEL و
+        │      AGENT_PROVIDER → PUT با sha
+        ▼
+ Outcome(model, provider, updated, unchanged, missing, withoutModel,
+         withoutProvider, failed) → یک پیام فارسی در Snackbar
 ```
 
 </div>
@@ -572,9 +592,16 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 
 - **چرا فایل‌ها و نه متغیر `AGENT_MODEL`؟** چون یک متغیر نمی‌تواند به هر دو خواننده سرویس بدهد:
   TEC از مسیر OpenCode می‌آید و مدل را به شکل `provider/model` می‌خواند که روی **نخستین `/`** جدا
-  می‌شود، پس به `openrouter/<id>` نیاز دارد؛ اما اسکریپت PO/QC مستقیم با API خودِ OpenRouter حرف
+  می‌شود، پس به `<provider>/<id>` نیاز دارد؛ اما اسکریپت PO/QC مستقیم با API خودِ سرویس حرف
   می‌زند و همان رشته را عیناً می‌فرستد، پس **نباید** پیشوند داشته باشد. هر جور بنویسید، برای یکی
   از آن دو غلط است. بازنویسی در خودِ فایل‌ها به هر فایل اجازه می‌دهد شکل موردنیاز خودش را نگه دارد.
+- **`AGENT_PROVIDER` هم با مدل جابه‌جا می‌شود:** حالا که یک مدل ممکن است از چند سرویس در دسترس
+  باشد، خودِ شناسه کافی نیست — همان پیش‌فرض دوم است که می‌گوید کدام کلید خرج شود و PO/QC به کدام
+  هاست بزند. این دو هرگز نباید از هم جدا بیفتند.
+- **«این پیشوند دارد یا نه؟» با جدول تصمیم گرفته می‌شود، نه با اسلش:** `minimax/minimax-m3:free`
+  یک شناسهٔ **مدل** روی OpenRouter است و `minimax/MiniMax-M3` یک جفت **سرویس/مدل** — هر دو با
+  `minimax/` شروع می‌شوند. فقط فهرست مدل‌های شناخته‌شده می‌تواند این دو را از هم جدا کند؛ برای
+  مدلی که MIA نمی‌شناسد (دست‌کاری‌شده یا حذف‌شده) همان `openrouter/` قدیمی ملاک است.
 - **بازنویسی عمداً باریک است:** فقط شناسهٔ مدلِ داخل پیش‌فرض `AGENT_MODEL` عوض می‌شود و **پیشوند هر
   رخداد همان‌طور که بود حفظ می‌شود**. پرامپت نقش‌ها که کاربر ممکن است دست‌کاری کرده باشد، مراحل
   اضافه‌شده و کامنت‌ها دست‌نخورده می‌مانند.
@@ -586,13 +613,18 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 - **سه فایل، نه چهار:** `token-usage.js` هم `AGENT_MODEL` را می‌خواند اما فقط برای *چاپ کردن*؛
   مقدارش را ورک‌فلو به آن پاس می‌دهد، پس پیش‌فرضی برای بازنویسی ندارد.
 - **گزارش دقیق:** خروجی `Outcome` بین «کامیت شد»، «از قبل روی همین مدل بود»، «این فایل را ندارد»،
-  «فایل هست ولی `AGENT_MODEL` ندارد» (نسل اولِ ورک‌فلوها که روی Gemini CLI کار می‌کرد) و «نوشتن رد
-  شد» فرق می‌گذارد — چون همهٔ این‌ها با یک «انجام شد» ساده یکسان به نظر می‌رسند و نیستند.
+  «فایل هست ولی `AGENT_MODEL` ندارد» (نسل اولِ ورک‌فلوها که روی Gemini CLI کار می‌کرد)، «فایل هست
+  ولی `AGENT_PROVIDER` ندارد» و «نوشتن رد شد» فرق می‌گذارد — چون همهٔ این‌ها با یک «انجام شد» سادهٔ
+  یکسان به نظر می‌رسند و نیستند. حالت `withoutProvider` مهم‌ترینشان است: مخزنی که فایل‌هایش قدیمی‌اند
+  شناسهٔ MiniMax را می‌گیرد ولی همچنان OpenRouter را صدا می‌زند، پس MIA به‌جای «موفق» می‌گوید
+  ورک‌فلوها باید به‌روزرسانی شوند.
 - **بدون توکن گیت‌هاب، دکمه نمایش داده نمی‌شود** (`MainUiState.isGitHubConfigured`) — به‌جای اینکه
   دیده شود و موقع زدن شکست بخورد.
 - **مدل‌های قابل انتخاب:** فهرست `AGENT_MODEL_CHOICES` دستی و بررسی‌شده است، نه گرفته‌شده از
-  `/api/v1/models`؛ دو شرط سختش **رایگان بودن** و **tool calling** است (بدون ابزار، OpenCode حتی
-  نمی‌تواند یک فایل را بخواند و TEC روی هر ایشو شکست می‌خورد).
+  `/api/v1/models`؛ شرط سختش **tool calling** است (بدون ابزار، OpenCode حتی نمی‌تواند یک فایل را
+  بخواند و TEC روی هر ایشو شکست می‌خورد). همهٔ گزینه‌های OpenRouter علاوه بر آن رایگان‌اند؛ تنها
+  گزینهٔ پولی `MiniMax-M3` روی حساب MiniMax خودِ کاربر است، برای وقتی سقف روزانهٔ رایگان کار را
+  متوقف می‌کند.
 
 > **مهاجرت دسته‌جمعی:** برای اینکه ده‌ها مخزن را یکجا جابه‌جا کنید (به‌جای تک‌تک از روی کارت)،
 > اسکریپت `docs/github/migrate-agent-model.sh` همین کار را با `gh` روی همهٔ مخزن‌ها انجام می‌دهد.
@@ -661,11 +693,13 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 
 **فایل‌ها:** `security/SecretStore.kt`، `security/AndroidCrypto.kt`
 
-- **`SecretStore`**: دو کلیدی که کاربر در زمان اجرا وارد می‌کند را در **`EncryptedSharedPreferences`**
+- **`SecretStore`**: کلیدهایی که کاربر در زمان اجرا وارد می‌کند را در **`EncryptedSharedPreferences`**
   (رمزنگاری AES-256-GCM با کلید نگه‌داری‌شده در Android Keystore) ذخیره می‌کند: کلید Gemini (برای
-  تشخیص گفتار روی دستگاه) و کلید OpenRouter (برای ایجنت CI). مقدار زمان‌اجرا بر پیش‌فرض زمان‌ساخت
-  (`BuildConfig.GEMINI_API_KEY` / `BuildConfig.OPENROUTER_API_KEY`) اولویت دارد. همچنین گزینهٔ «سپردن به
-  ایجنت به‌صورت پیش‌فرض» را نگه می‌دارد.
+  تشخیص گفتار روی دستگاه)، کلید OpenRouter و کلید پشتیبانش، و کلید MiniMax (برای گزینهٔ پولی
+  `MiniMax-M3`). مقدار زمان‌اجرا بر پیش‌فرض زمان‌ساخت (`BuildConfig.GEMINI_API_KEY` /
+  `BuildConfig.OPENROUTER_API_KEY` / `BuildConfig.MINIMAX_API_KEY`) اولویت دارد. `apiKeyFor(provider)`
+  همین انتخاب را برای فراخوان‌ها بسته‌بندی می‌کند. همچنین مدلِ دستورهای متنی (`textModelId`) و گزینهٔ
+  «سپردن به ایجنت به‌صورت پیش‌فرض» را نگه می‌دارد.
 - **`LibsodiumSecretEncryptor`**: برای ذخیرهٔ کلید OpenRouter به‌عنوان Secret گیت‌هاب، باید مقدار را طبق
   استاندارد API اکشنز رمز کرد: یک **libsodium sealed box** (`crypto_box_seal`) در برابر کلید عمومی
   Curve25519 مخزن، به‌صورت Base64. این کار در دستگاه انجام می‌شود، پس کلید هرگز به‌صورت متن ساده به
@@ -676,7 +710,7 @@ tasks(id uuid pk, project_id uuid fk -> projects.id,
 - کلیدهای Gemini و OpenRouter در `EncryptedSharedPreferences` **رمزنگاری‌شده** ذخیره می‌شوند.
 
 **کلیدهای زمان‌ساخت** (به `BuildConfig` تزریق می‌شوند؛ منبع و ترتیب اولویت در بخش ۹):
-`GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
+`GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY`، `MINIMAX_API_KEY`، `SUPABASE_URL`، `SUPABASE_ANON_KEY`.
 
 ---
 
@@ -772,7 +806,7 @@ data class TokenUsage(
 | فایل | وضعیت | محتوا |
 |---|---|---|
 | `secrets.public.properties` | کامیت‌شده، متن ساده | `SUPABASE_URL` و `SUPABASE_ANON_KEY` — این‌ها **ذاتاً عمومی‌اند**؛ کلید publishable سوپابیس برای اجرا داخل کلاینت طراحی شده و دسترسی هر ردیف با RLS محدود می‌شود. |
-| `secrets.enc` | کامیت‌شده، رمزشده | `GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY` — با AES-256-CBC (کلید از PBKDF2-HMAC-SHA256، ۱۰۰٬۰۰۰ تکرار). |
+| `secrets.enc` | کامیت‌شده، رمزشده | `GITHUB_TOKEN`، `GEMINI_API_KEY`، `OPENROUTER_API_KEY`، `OPENROUTER_FALLBACK_API_KEY`، `MINIMAX_API_KEY` — با AES-256-CBC (کلید از PBKDF2-HMAC-SHA256، ۱۰۰٬۰۰۰ تکرار). |
 | `local.properties` | گیت‌ایگنور | فقط `sdk.dir` و بازنویسی‌های اختیاری هر توسعه‌دهنده. |
 
 **عبارت عبور** تنها چیزی است که وارد مخزن نمی‌شود. یک‌بار روی هر ماشین تنظیمش کنید:

@@ -4,7 +4,8 @@
 #   • a human comments "@tec ..." on an issue (e.g. "@tec add a logout button"), or
 #   • an issue is labeled "by-agent" (the path the MIA app attaches programmatically).
 #
-# It lets the OpenCode CLI — driven by a FREE OpenRouter model — implement the issue by
+# It lets the OpenCode CLI — driven by a free OpenRouter model, or by MiniMax M3 on your own
+# MiniMax account — implement the issue by
 # editing files, gates the result on the Gradle build, then opens a pull request from a
 # per-issue branch, squash-merges it, and comments back. Nothing is pushed straight to the
 # default branch: every change lands through a reviewable, revertable PR that auto-closes
@@ -44,6 +45,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      # Which service serves AGENT_MODEL, and therefore which API key secret this run spends.
+      # "openrouter" (free tier) or "minimax" (your own paid MiniMax account). Set it with an
+      # AGENT_PROVIDER repo/environment variable, or from the MIA app's model picker, which
+      # rewrites this default and the AGENT_MODEL ones together — they must always agree.
+      AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       # Issue title/body are untrusted user input — keep them in env vars and never
@@ -96,6 +102,9 @@ jobs:
       # breakdown can be parsed. A free model (a `:free` id) legitimately moves it by $0.
       - name: Read OpenRouter credits (before)
         id: credits_before
+        # Only OpenRouter has this endpoint. On any other provider the samples are simply not
+        # taken and token-usage.js reads the empty values as "cost unknown".
+        if: env.AGENT_PROVIDER == 'openrouter'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
@@ -104,15 +113,23 @@ jobs:
           usage="$(node -e 'try{process.stdout.write(String(JSON.parse(process.argv[1]).data.usage))}catch{}' "$body" || true)"
           echo "usage=$usage" >> "$GITHUB_OUTPUT"
 
-      # OpenCode reads OPENROUTER_API_KEY automatically (no interactive `opencode auth login`).
-      # Models are addressed "provider/model" and OpenCode splits on the FIRST "/", so
+      # OpenCode reads each provider's key from its own env var (OPENROUTER_API_KEY,
+      # MINIMAX_API_KEY) — no interactive `opencode auth login`. Models are addressed
+      # "provider/model" and OpenCode splits on the FIRST "/", so
       # `openrouter/minimax/minimax-m3:free` means provider=openrouter,
-      # model=minimax/minimax-m3:free. That model is free (no charge for prompt or completion
-      # tokens) with a 1M-token context and tool calling — which OpenCode needs to edit files at
-      # all. It replaced stealth/ox-alpha, which OpenRouter withdrew: any free endpoint can be
-      # rate limited or pulled without notice, and prompts/completions may be logged depending on
-      # your OpenRouter privacy settings, so don't send it anything secret; override with an
-      # AGENT_MODEL repo/environment variable to switch.
+      # model=minimax/minimax-m3:free, while `minimax/MiniMax-M3` means provider=minimax,
+      # model=MiniMax-M3.
+      #
+      # The default is free (no charge for prompt or completion tokens) with a 1M-token context
+      # and tool calling — which OpenCode needs to edit files at all. It replaced
+      # stealth/ox-alpha, which OpenRouter withdrew: any free endpoint can be rate limited or
+      # pulled without notice, and prompts/completions may be logged depending on your OpenRouter
+      # privacy settings, so don't send it anything secret.
+      #
+      # `minimax/MiniMax-M3` is the same model served first-party against your own paid MiniMax
+      # account: it costs real money per run, and in exchange it does not share the free tier's
+      # daily request cap. Switch with the MIA app's per-project model picker, or by hand with
+      # AGENT_MODEL + AGENT_PROVIDER repo/environment variables — both, always together.
       # The step degrades cleanly on a 429 instead of failing red.
       - name: Run OpenCode CLI
         id: agent
@@ -121,10 +138,22 @@ jobs:
           # Optional spare key. Free-tier OpenRouter keys are capped per day, so without one a
           # single exhausted key stops TEC outright until the quota resets.
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          # Read only when AGENT_PROVIDER is "minimax". The MIA app pushes it alongside the
+          # OpenRouter one, so switching provider needs no visit to GitHub's own settings.
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
         run: |
           set -o pipefail
-          if [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
+          # "Is a key configured" depends on which provider AGENT_MODEL names.
+          if [ "$AGENT_PROVIDER" = "minimax" ]; then
+            if [ -z "$MINIMAX_API_KEY" ]; then
+              echo "status=nokey" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # A paid account has no spare-key dance: one key, one attempt. Blanking it here is
+            # what keeps the retry block below inert without a second provider branch in it.
+            OPENROUTER_API_KEY_FALLBACK=""
+          elif [ -z "$OPENROUTER_API_KEY" ] && [ -z "$OPENROUTER_API_KEY_FALLBACK" ]; then
             echo "status=nokey" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -156,7 +185,9 @@ jobs:
             return 1
           }
 
-          if [ -n "$OPENROUTER_API_KEY" ]; then
+          # The "start on the spare" case is OpenRouter-only: every other provider has exactly
+          # one key and has already been checked to hold it.
+          if [ "$AGENT_PROVIDER" != "openrouter" ] || [ -n "$OPENROUTER_API_KEY" ]; then
             run_agent
             rc=$?
           else
@@ -223,10 +254,14 @@ jobs:
             echo "No .github/scripts/token-usage.js in this repo; skipping the spend report."
           fi
 
-      - name: Report missing OpenRouter key
+      - name: Report missing model API key
         if: steps.agent.outputs.status == 'nokey'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
+          if [ "$AGENT_PROVIDER" = "minimax" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: this repo is set to a MiniMax model but no `MINIMAX_API_KEY` Actions secret is set.\n\nAdd your MiniMax API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `MINIMAX_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
+          else
+            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or re-add the by-agent label) to retry.'
+          fi
           exit 1
 
       # Free-tier rate/quota exhaustion is expected, not a bug: comment and pass green so the
@@ -234,7 +269,7 @@ jobs:
       - name: Report quota exhaustion
         if: steps.agent.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the OpenRouter quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, point the `AGENT_MODEL` variable at another model, or add OpenRouter credit — then comment `@tec` again to retry.'
+          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the provider\'s quota/rate limit was hit (HTTP 429) \u2014 on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, add OpenRouter credit, or switch this repo to MiniMax M3 on your own MiniMax account (`AGENT_PROVIDER=minimax`, `AGENT_MODEL=minimax/MiniMax-M3`, plus a `MINIMAX_API_KEY` secret \u2014 the MIA app\'s model picker sets all three). Then comment `@tec` again to retry.'
 
       - name: Report unexpected agent failure
         if: steps.agent.outputs.status == 'error'

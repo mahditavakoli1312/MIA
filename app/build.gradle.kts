@@ -41,6 +41,10 @@ android {
             "OPENROUTER_FALLBACK_API_KEY",
             "\"${secret("OPENROUTER_FALLBACK_API_KEY")}\""
         )
+        // Optional build-time default for the MiniMax platform key. It powers the paid
+        // `MiniMax-M3` option in the app and is pushed to each repo as the MINIMAX_API_KEY
+        // Actions secret; the runtime override from Settings wins. See SecretStore.
+        buildConfigField("String", "MINIMAX_API_KEY", "\"${secret("MINIMAX_API_KEY")}\"")
         buildConfigField("String", "SUPABASE_URL", "\"${secret("SUPABASE_URL")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${secret("SUPABASE_ANON_KEY")}\"")
     }

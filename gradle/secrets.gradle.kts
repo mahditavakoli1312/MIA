@@ -33,6 +33,7 @@ val ENCRYPTED_KEYS = listOf(
     "GEMINI_API_KEY",
     "OPENROUTER_API_KEY",
     "OPENROUTER_FALLBACK_API_KEY",
+    "MINIMAX_API_KEY",
 )
 
 val encFile = rootProject.file("secrets.enc")

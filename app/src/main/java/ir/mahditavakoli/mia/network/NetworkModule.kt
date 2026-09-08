@@ -14,6 +14,9 @@ import ir.mahditavakoli.mia.security.AndroidBase64Decoder
 import ir.mahditavakoli.mia.security.AndroidBase64Encoder
 import ir.mahditavakoli.mia.security.LibsodiumSecretEncryptor
 import ir.mahditavakoli.mia.security.SecretStore
+import ir.mahditavakoli.mia.network.minimax.MiniMaxApi
+import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.ChatCompleter
 import ir.mahditavakoli.mia.network.openrouter.OpenRouterApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseApi
 import ir.mahditavakoli.mia.network.supabase.SupabaseAuthApi
@@ -38,7 +41,7 @@ object NetworkModule {
     lateinit var sessionManager: SessionManager
         private set
 
-    /** Encrypted store for the runtime Gemini/OpenRouter keys + the agent-handled toggle. */
+    /** Encrypted store for the runtime Gemini/OpenRouter/MiniMax keys + the agent-handled toggle. */
     lateinit var secretStore: SecretStore
         private set
 
@@ -106,7 +109,8 @@ object NetworkModule {
             bootstrapper = repoBootstrapper,
             agentModelMigrator = agentModelMigrator,
             agentApiKeyProvider = { secretStore.agentApiKey },
-            agentFallbackApiKeyProvider = { secretStore.agentFallbackApiKey }
+            agentFallbackApiKeyProvider = { secretStore.agentFallbackApiKey },
+            miniMaxApiKeyProvider = { secretStore.miniMaxApiKey }
         )
     }
 
@@ -221,6 +225,39 @@ object NetworkModule {
             .addConverterFactory(openRouterConverterFactory)
             .build()
             .create()
+    }
+
+    /**
+     * The same two typed-command calls, but on MiniMax's own platform — the paid alternative to
+     * the free OpenRouter tier, selectable in Settings. Timeouts match OpenRouter's for exactly
+     * the same reason: the answer is uncapped and full-effort thinking can run for minutes.
+     */
+    val miniMaxApi: MiniMaxApi by lazy {
+        Retrofit.Builder()
+            .baseUrl(AgentProvider.MINIMAX.apiBaseUrl)
+            .client(
+                OkHttpClient.Builder()
+                    .connectTimeout(30, TimeUnit.SECONDS)
+                    .writeTimeout(60, TimeUnit.SECONDS)
+                    .readTimeout(5, TimeUnit.MINUTES)
+                    .callTimeout(6, TimeUnit.MINUTES)
+                    .addInterceptor(loggingInterceptor)
+                    .addInterceptor(chuckerInterceptor)
+                    .build()
+            )
+            .addConverterFactory(openRouterConverterFactory)
+            .build()
+            .create()
+    }
+
+    /**
+     * The chat client for [provider], so callers pick a model and get the right host for free.
+     * Both sides speak the same OpenAI-compatible bodies — see
+     * [ir.mahditavakoli.mia.network.openrouter.ChatCompleter].
+     */
+    fun chatCompleterFor(provider: AgentProvider): ChatCompleter = when (provider) {
+        AgentProvider.OPENROUTER -> ChatCompleter(openRouterApi::chatCompletion)
+        AgentProvider.MINIMAX -> ChatCompleter(miniMaxApi::chatCompletion)
     }
 
     /** Multimodal voice→intent: takes recorded audio and returns the intent JSON directly. */
