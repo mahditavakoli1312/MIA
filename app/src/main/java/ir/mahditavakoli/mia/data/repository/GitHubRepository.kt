@@ -224,6 +224,21 @@ class GitHubRepository(
     }
 
     /**
+     * Hands an issue back to the CI agent: posts `@tec do this : …` as a comment, which is the
+     * one trigger the agent workflow listens for besides the [AGENT_LABEL] itself.
+     *
+     * A comment rather than re-adding the label, because a label MIA has already attached cannot
+     * be attached twice — an issue the agent gave up on still carries its history, and re-adding
+     * `by-agent` would be a no-op that fires nothing. The workflow puts the issue back in the
+     * queue when it sees the comment, so a re-done issue takes its place at the back of the line
+     * rather than jumping ahead of what is already waiting.
+     *
+     * Returns the created comment so the screen can show it without re-reading the thread.
+     */
+    suspend fun redoIssue(projectName: String, issue: RepoIssue): Result<IssueComment> =
+        addIssueComment(projectName, issue.number, redoCommentFor(issue))
+
+    /**
      * The model this project's repo runs its AI team on right now, or null when the repo has no
      * workflow naming one. Read straight from the repo rather than remembered locally: the files
      * are the source of truth, and they can be edited on GitHub without MIA ever seeing it.
@@ -318,6 +333,25 @@ class GitHubRepository(
          * pointed at something much bigger.
          */
         private const val ISSUE_PAGE_LIMIT = 3
+
+        /**
+         * The comment the Re-do button posts: the agent's own trigger word followed by the
+         * brief it should work from.
+         *
+         * The brief is the issue body, falling back to the title for an issue that has none —
+         * "@tec do this :" with nothing after it would send the agent off with no instructions
+         * at all. The spend footer MIA appends when it opens an issue (see
+         * [ir.mahditavakoli.mia.data.model.TokenUsage.asIssueFooter], written below a `---`
+         * rule) is dropped: it is bookkeeping about the issue, not part of what to build.
+         */
+        fun redoCommentFor(issue: RepoIssue): String {
+            val brief = issue.body
+                ?.substringBefore("\n---\n")
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: issue.title.trim()
+            return "@tec do this : $brief"
+        }
 
         /**
          * GitHub repo names may only contain ASCII letters, digits, '.', '-', '_'.

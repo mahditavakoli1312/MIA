@@ -215,9 +215,16 @@ class RepoBootstrapper(
         /** The paid MiniMax platform key, read only by repos pointed at a MiniMax model. */
         const val MINIMAX_SECRET_NAME = "MINIMAX_API_KEY"
 
-        /** GitHub label colors are 6-digit hex without a leading '#'. */
+        /**
+         * The labels the agent queue runs on, created up front so the workflow can move an
+         * issue between them (adding a label to an issue does not create a missing one).
+         * `by-agent` means queued, `agent-running` means claimed, and the last two are the two
+         * ways it ends. GitHub label colors are 6-digit hex without a leading '#'.
+         */
         val LABELS = listOf(
             "by-agent" to "1d76db",
+            "agent-running" to "fbca04",
+            "agent-failed" to "b60205",
             "done" to "0e8a16"
         )
     }

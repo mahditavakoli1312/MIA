@@ -29,7 +29,7 @@ class RepoBootstrapperTest {
         RepoBootstrapper(api, base64, encryptor, files, templateRepo = template)
 
     @Test
-    fun `plain creation uploads all team files, creates both labels, sets secret`() = runBlocking {
+    fun `plain creation uploads all team files, creates the queue labels, sets secret`() = runBlocking {
         val api = FakeGitHubApi()
 
         val result = bootstrapper(api).bootstrap(
@@ -51,7 +51,7 @@ class RepoBootstrapperTest {
             assertEquals(base64.encode(file.content.toByteArray()), uploaded[file.repoPath])
         }
 
-        // Both labels with the required colors.
+        // Every queue label, with the required colors.
         assertEquals(
             RepoBootstrapper.LABELS.toSet(),
             api.createdLabels.map { it.name to it.color }.toSet()
@@ -80,7 +80,7 @@ class RepoBootstrapperTest {
         assertNull("plain createRepo must not be called in template mode", api.createRepoBody)
         assertTrue("template already carries the workflow", api.putContents.isEmpty())
         // Labels + secret still applied.
-        assertEquals(2, api.createdLabels.size)
+        assertEquals(RepoBootstrapper.LABELS.size, api.createdLabels.size)
         assertNotNull(api.putSecretBody)
     }
 
@@ -168,7 +168,7 @@ class RepoBootstrapperTest {
         assertEquals(files.size, result.warnings.count { it.contains("upload of") })
         assertTrue(result.warnings.any { it.contains("agent-issue-worker.yml") })
         // Later steps still ran.
-        assertEquals(2, api.createdLabels.size)
+        assertEquals(RepoBootstrapper.LABELS.size, api.createdLabels.size)
         assertNotNull(api.putSecretBody)
     }
 }

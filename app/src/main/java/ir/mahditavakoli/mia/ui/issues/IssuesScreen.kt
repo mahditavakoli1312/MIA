@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -185,7 +186,12 @@ fun IssuesScreen(
                             contentPadding = PaddingValues(bottom = 88.dp)
                         ) {
                             items(uiState.visible, key = { it.number }) { issue ->
-                                IssueRow(issue = issue, onClick = { onOpenIssue(issue.number) })
+                                IssueRow(
+                                    issue = issue,
+                                    isRedoing = issue.number in uiState.redoing,
+                                    onClick = { onOpenIssue(issue.number) },
+                                    onRedo = { viewModel.onRedo(issue) }
+                                )
                                 HorizontalDivider(color = MaterialTheme.colorScheme.outline)
                             }
                             if (uiState.all.isTruncated) {
@@ -219,8 +225,20 @@ fun IssuesScreen(
     }
 }
 
+/**
+ * One issue in the list.
+ *
+ * @param onRedo hands the issue back to the CI agent (the ⟳ button). Offered on every issue,
+ *        open or closed: re-doing a closed one is exactly how you ask the agent for another
+ *        attempt at something it already merged.
+ */
 @Composable
-private fun IssueRow(issue: RepoIssue, onClick: () -> Unit) {
+private fun IssueRow(
+    issue: RepoIssue,
+    isRedoing: Boolean,
+    onClick: () -> Unit,
+    onRedo: () -> Unit
+) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -238,6 +256,22 @@ private fun IssueRow(issue: RepoIssue, onClick: () -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
+            Spacer(Modifier.width(4.dp))
+            IconButton(onClick = onRedo, enabled = !isRedoing) {
+                if (isRedoing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Replay,
+                        contentDescription = "سپردن دوباره به ایجنت",
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {

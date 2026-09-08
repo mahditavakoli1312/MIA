@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import ir.mahditavakoli.mia.network.github.GitHubLabel
@@ -127,6 +128,43 @@ class GitHubRepositoryIssuesTest {
 
         val thread = repository.issueCommentsFor("My Project", 5).getOrThrow()
         assertEquals(listOf("first", "second"), thread.map { it.body })
+    }
+
+    @Test
+    fun `re-do comments the agent trigger with the issue body as the brief`() = runBlocking {
+        val api = FakeGitHubApi()
+        api.issues += issue(5)
+        val repository = repository(api)
+        val target = repository.issueFor("My Project", 5).getOrThrow()
+
+        val posted = repository.redoIssue("My Project", target).getOrThrow()
+
+        assertEquals("@tec do this : body of 5", posted.body)
+        assertEquals(listOf("@tec do this : body of 5"), api.issueComments[5]?.map { it.body })
+    }
+
+    @Test
+    fun `re-do falls back to the title and drops the spend footer`() {
+        val withFooter = RepoIssue(
+            number = 5,
+            title = "Add a logout button",
+            body = "Put it in the drawer.\n---\nMIA spend: 1,204 tokens",
+            isOpen = true,
+            author = "octocat",
+            createdAt = null,
+            commentCount = 0,
+            labels = emptyList(),
+            htmlUrl = ""
+        )
+        assertEquals(
+            "@tec do this : Put it in the drawer.",
+            GitHubRepository.redoCommentFor(withFooter)
+        )
+        // An issue with no body at all still has to tell the agent what to build.
+        assertEquals(
+            "@tec do this : Add a logout button",
+            GitHubRepository.redoCommentFor(withFooter.copy(body = "   "))
+        )
     }
 
     @Test
