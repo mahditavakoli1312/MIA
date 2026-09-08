@@ -1,12 +1,17 @@
 package ir.mahditavakoli.mia.security
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
+import java.io.IOException
+import java.security.GeneralSecurityException
+import java.security.KeyStore
 
 /**
  * Secure, on-device storage for secrets the user enters at runtime:
@@ -23,15 +28,7 @@ import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
  */
 class SecretStore(context: Context) {
 
-    private val prefs = EncryptedSharedPreferences.create(
-        context.applicationContext,
-        PREFS_NAME,
-        MasterKey.Builder(context.applicationContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val prefs = openPrefs(context.applicationContext)
 
     /** The Gemini API key: runtime override if present, else the build-time default, else null. */
     val geminiApiKey: String?
@@ -134,6 +131,7 @@ class SecretStore(context: Context) {
         }
 
     private companion object {
+        const val TAG = "MIA_SecretStore"
         const val PREFS_NAME = "mia_secrets"
         const val KEY_GEMINI = "gemini_api_key"
         const val KEY_OPENROUTER = "openrouter_api_key"
@@ -141,5 +139,70 @@ class SecretStore(context: Context) {
         const val KEY_MINIMAX = "minimax_api_key"
         const val KEY_TEXT_MODEL = "text_model_id"
         const val KEY_AGENT_DEFAULT = "agent_handled_by_default"
+
+        /**
+         * Opens the store, resetting it once if it can't be decrypted.
+         *
+         * [PREFS_NAME] holds both the secrets and the Tink keyset that protects them, and that
+         * keyset is itself sealed with a Keystore key that never leaves the device. So the file
+         * and the key can drift apart — a cloud backup or device-transfer restore brings the file
+         * to a phone whose Keystore has a different key, and clearing the lock screen can drop
+         * the key out from under a file that stays. Either way `create` fails on the keyset with
+         * an AEADBadTagException, which used to take [ir.mahditavakoli.mia.MIAApplication] down
+         * with it: an unrecoverable crash on every launch, on a store holding nothing that can't
+         * be typed in again.
+         *
+         * Wiping the file and the stale Keystore alias makes the next attempt build a fresh pair.
+         * The runtime keys are lost, but the app starts, falls back to its BuildConfig defaults,
+         * and Settings can take them again.
+         */
+        fun openPrefs(appContext: Context): SharedPreferences = try {
+            createPrefs(appContext)
+        } catch (e: GeneralSecurityException) {
+            resetAndCreatePrefs(appContext, e)
+        } catch (e: IOException) {
+            resetAndCreatePrefs(appContext, e)
+        }
+
+        fun createPrefs(appContext: Context): SharedPreferences =
+            EncryptedSharedPreferences.create(
+                appContext,
+                PREFS_NAME,
+                MasterKey.Builder(appContext)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+
+        /**
+         * Second and last attempt: if this one throws too, the Keystore is broken in a way we
+         * can't undo by deleting our own state, and crashing beats pretending secrets are stored.
+         */
+        fun resetAndCreatePrefs(appContext: Context, cause: Exception): SharedPreferences {
+            Log.w(TAG, "Secret store unreadable; resetting it. Saved API keys are lost.", cause)
+            appContext.deleteSharedPreferences(PREFS_NAME)
+            deleteMasterKey()
+            return createPrefs(appContext)
+        }
+
+        /**
+         * Drops the Keystore key behind [MasterKey], so the retry generates a new one. Failing to
+         * delete it is not fatal on its own: with the file gone the retry can still succeed by
+         * re-sealing a new keyset under the existing key.
+         */
+        fun deleteMasterKey() {
+            try {
+                KeyStore.getInstance(ANDROID_KEYSTORE)
+                    .apply { load(null) }
+                    .deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+            } catch (e: GeneralSecurityException) {
+                Log.w(TAG, "Could not delete the master key", e)
+            } catch (e: IOException) {
+                Log.w(TAG, "Could not delete the master key", e)
+            }
+        }
+
+        const val ANDROID_KEYSTORE = "AndroidKeyStore"
     }
 }

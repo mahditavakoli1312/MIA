@@ -11,7 +11,7 @@ import java.util.Base64
 
 class RepoBootstrapperTest {
 
-    // Stands in for the six real bundled files; the bootstrapper commits each verbatim.
+    // Stands in for the seven real bundled files; the bootstrapper commits each verbatim.
     private val files = listOf(
         BootstrapFile(".github/workflows/agent-issue-worker.yml", "name: Agent Issue Worker\n"),
         BootstrapFile(".github/workflows/ai-role-review.yml", "name: AI Role Review\n"),
