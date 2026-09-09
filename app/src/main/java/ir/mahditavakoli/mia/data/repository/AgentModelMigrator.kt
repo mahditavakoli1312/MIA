@@ -111,16 +111,43 @@ class AgentModelMigrator(
      * without that workflow, or a repo that is not a MIA repo at all. A pre-role repo answers
      * the same model for every role, which is the truth: that is what all of them run on.
      */
-    suspend fun currentModels(owner: String, repo: String): Map<AgentRole, String> {
+    suspend fun currentModels(owner: String, repo: String): Map<AgentRole, String> =
+        report(owner, repo).models
+
+    /**
+     * What this repo's AI-team files say, in one pass.
+     *
+     * @param models the model each repo role runs on.
+     * @param roleScoped true when at least one file carries a role-scoped ladder — i.e. the repo
+     *        is new enough for a model per role. False means every role there shares one
+     *        `AGENT_MODEL` whatever the user picks, which is what the model screen offers to fix
+     *        by updating the files.
+     * @param present the managed files this repo actually has.
+     */
+    data class TeamFiles(
+        val models: Map<AgentRole, String> = emptyMap(),
+        val roleScoped: Boolean = false,
+        val present: List<String> = emptyList()
+    ) {
+        /** True for a repo that carries none of the model-bearing files at all. */
+        val isNotATeamRepo: Boolean get() = present.isEmpty()
+    }
+
+    /** One read of every model-bearing file, answering both questions the model screen asks. */
+    suspend fun report(owner: String, repo: String): TeamFiles {
         val found = mutableMapOf<AgentRole, String>()
+        val present = mutableListOf<String>()
+        var roleScoped = false
         for ((path, _) in AgentTeamFiles.MODEL_BEARING_PATHS) {
             val file = read(owner, repo, path) ?: continue
+            present += path
+            if (AgentTeamFiles.hasAnyRoleDefault(file.text)) roleScoped = true
             for (role in AgentRole.REPO_ROLES) {
                 if (role in found) continue
                 AgentTeamFiles.readRoleModel(file.text, role)?.let { found[role] = it }
             }
         }
-        return found
+        return TeamFiles(models = found, roleScoped = roleScoped, present = present)
     }
 
     /**

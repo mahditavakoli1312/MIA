@@ -6,9 +6,13 @@
 # issue's acceptance criteria, and leaves its verdict as a label the TEC workflow is waiting for:
 #
 #   qc-approved  → TEC merges, exactly as it did before this workflow existed.
+#   needs-po     → two rework rounds were not enough, so the PO re-scopes the brief and the loop
+#                  continues (the work is never abandoned) — see po-rebrief.js.
 #   needs-rework → TEC does not merge. The issue is re-queued with QC's blocking list appended to
-#                  the prompt, at most twice, then labelled `needs-human` and left alone.
+#                  the prompt; after two such rounds the verdict becomes `needs-po` instead.
 #   qc-skipped   → QC could not review (no key, quota, unusable answer). TEC merges anyway.
+#   needs-human  → only when a repo set an `AGENT_MAX_CYCLES` ceiling and the loop reached it.
+#                  The issue is PAUSED — branch and pull request intact — never abandoned.
 #
 # The gate deliberately fails OPEN. A free model that is rate limited must not be able to block
 # every merge in a repository, so the only outcome that stops a merge is a model that actually
@@ -52,7 +56,8 @@ jobs:
           create qc-approved 0e8a16 "QC approved this pull request"
           create qc-skipped bfd4f2 "QC could not review — merging is not blocked"
           create needs-rework d93f0b "QC asked for changes before this can be merged"
-          create needs-human b60205 "Two rework rounds were not enough — a human is needed"
+          create needs-po 5319e7 "QC rejected it twice — the PO is re-scoping the brief"
+          create needs-human b60205 "Paused for a human — the AGENT_MAX_CYCLES ceiling was reached"
 
       # AGENTS.md and the acceptance criteria are the standard QC judges against, so the review
       # needs the repo, not just the diff.
@@ -90,6 +95,9 @@ jobs:
           # Raw model id — NO provider prefix: this script calls the provider's API directly.
           AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
           AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
+          # How many PO re-scopes one issue may have before it is paused for a human. Unset or 0
+          # means the QC → PO → TEC loop never stops on its own, which is the default.
+          AGENT_MAX_CYCLES: ${{ vars.AGENT_MAX_CYCLES }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff

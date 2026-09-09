@@ -41,6 +41,13 @@ class SpendRepositoryTest {
                 files = { emptyList() }
             ),
             agentModelMigrator = AgentModelMigrator(api, base64, decoder),
+        teamFilesUpdater = TeamFilesUpdater(
+            api = api,
+            base64 = base64,
+            base64Decoder = decoder,
+            currentFiles = { emptyList() },
+            migrator = AgentModelMigrator(api, base64, decoder)
+        ),
             agentApiKeyProvider = { null },
             agentFallbackApiKeyProvider = { null }
         ),

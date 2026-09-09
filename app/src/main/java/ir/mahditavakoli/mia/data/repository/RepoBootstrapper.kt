@@ -280,8 +280,10 @@ class RepoBootstrapper(
          * intent waiting to be decomposed, `brief-planned`/`brief-failed` are how that ended, and
          * `blocked` marks a child issue whose prerequisites have not landed. The last four are the
          * QC gate on TEC's pull requests: `qc-approved` / `qc-skipped` let a merge through,
-         * `needs-rework` sends the issue back once more, and `needs-human` is where two failed
-         * rework rounds end — the one label that takes an issue out of the queue for good.
+         * `needs-rework` sends the issue back for another attempt, `needs-po` hands it to the PO
+         * to re-scope once two attempts were not enough — which is how the loop keeps going
+         * instead of dropping the work — and `needs-human` is the one label that takes an issue
+         * out of the queue, reached only when a repo set an `AGENT_MAX_CYCLES` ceiling.
          */
         val LABELS = listOf(
             "by-agent" to "1d76db",
@@ -295,6 +297,7 @@ class RepoBootstrapper(
             "qc-approved" to "0e8a16",
             "qc-skipped" to "bfd4f2",
             "needs-rework" to "d93f0b",
+            "needs-po" to "5319e7",
             "needs-human" to "b60205"
         )
     }

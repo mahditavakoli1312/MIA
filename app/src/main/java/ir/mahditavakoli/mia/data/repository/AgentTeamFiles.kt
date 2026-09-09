@@ -244,7 +244,12 @@ object AgentTeamFiles {
         return legacy?.let(::unqualify)
     }
 
-    private fun hasAnyRoleDefault(text: String): Boolean =
+    /**
+     * Whether [text] carries at least one role-scoped ladder, i.e. whether this file is new
+     * enough to give each role its own model. Public because the model screen offers to update
+     * a repo's files, and "these cannot hold a model per role" is what it offers to fix.
+     */
+    fun hasAnyRoleDefault(text: String): Boolean =
         AgentRole.REPO_ROLES.any { role -> modelPattern(role)?.containsMatchIn(text) == true }
 
     /**

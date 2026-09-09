@@ -1,5 +1,8 @@
 package ir.mahditavakoli.mia.ui.models
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +19,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -141,7 +146,124 @@ fun ProjectModelsScreen(
                 }
             }
         }
+
+        if (uiState.confirmUpdateFiles) {
+            UpdateFilesDialog(
+                onConfirm = viewModel::onConfirmUpdateFiles,
+                onDismiss = viewModel::onDismissUpdateFiles
+            )
+        }
     }
+}
+
+/**
+ * The offer to bring this repo's `.github` AI-team files up to the app's own version.
+ *
+ * It is on this screen rather than in Settings because this is where the consequence of stale
+ * files is felt: a repo whose workflows predate role-scoped models silently runs every role on
+ * one model no matter what is picked above, and the only honest place to say so is next to the
+ * pickers that are not working. When that is the case the card leads with it; otherwise it stays
+ * a quiet maintenance action, because a repo that is already current has nothing to fix.
+ */
+@Composable
+private fun TeamFilesCard(
+    isOutdated: Boolean,
+    isUpdating: Boolean,
+    enabled: Boolean,
+    onUpdate: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                if (isOutdated) {
+                    MaterialTheme.colorScheme.errorContainer
+                } else {
+                    MaterialTheme.colorScheme.surface
+                }
+            )
+            .padding(16.dp)
+    ) {
+        Text(
+            text = if (isOutdated) "فایل‌های تیم AI این مخزن قدیمی‌اند" else "فایل‌های تیم AI",
+            style = MaterialTheme.typography.titleSmall,
+            color = if (isOutdated) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = if (isOutdated) {
+                "این مخزن فقط یک مدل مشترک دارد، پس انتخاب مدل جداگانه برای هر نقش روی آن " +
+                    "اثر نمی‌کند. با به‌روزرسانی، ورک‌فلوها و اسکریپت‌های `.github` به نسخهٔ " +
+                    "همین اپ می‌رسند — و حلقهٔ QC → PO → TEC هم فعال می‌شود."
+            } else {
+                "ورک‌فلوها و اسکریپت‌های `.github` را به نسخهٔ همین اپ می‌رساند. مدل فعلی هر " +
+                    "نقش حفظ می‌شود."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (isOutdated) {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = onUpdate,
+            enabled = enabled && !isUpdating,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            if (isUpdating) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(if (isUpdating) "در حال به‌روزرسانی..." else "به‌روزرسانی فایل‌های نقش‌ها")
+        }
+    }
+}
+
+/**
+ * Confirms before overwriting, and names the one consequence a reader would not predict.
+ *
+ * The role prompts live inside the managed scripts, so a user who edited one loses that edit —
+ * that is the sentence this dialog exists for. Everything else it says is reassurance: the
+ * models survive, and the files it will not touch are named so "update" does not read as
+ * "reset my project".
+ */
+@Composable
+private fun UpdateFilesDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("به‌روزرسانی فایل‌های تیم AI؟") },
+        text = {
+            Column {
+                Text(
+                    text = "همهٔ فایل‌های زیر `.github/` (ورک‌فلوها و اسکریپت‌های نقش‌ها) با " +
+                        "نسخهٔ همین اپ جایگزین و روی گیت‌هاب commit می‌شوند.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "• مدل فعلی هر نقش خوانده و حفظ می‌شود.\n" +
+                        "• `AGENTS.md` و فایل‌های `mia/design` دست نمی‌خورند.\n" +
+                        "• اگر پرامپت نقش‌ها را داخل همین اسکریپت‌ها دستی تغییر داده‌اید، آن " +
+                        "تغییرها از بین می‌روند.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("به‌روزرسانی کن") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("انصراف") } }
+    )
 }
 
 @Composable
@@ -158,6 +280,14 @@ private fun RoleList(uiState: ProjectModelsUiState, viewModel: ProjectModelsView
                     "کار می‌کند.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        item {
+            TeamFilesCard(
+                isOutdated = uiState.filesAreOutdated,
+                isUpdating = uiState.isUpdatingFiles,
+                enabled = !uiState.isApplying,
+                onUpdate = viewModel::onUpdateFilesClick
             )
         }
         items(AgentRole.entries, key = { it.id }) { role ->

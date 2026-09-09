@@ -89,6 +89,10 @@ jobs:
           gh label create agent-running --color fbca04 --description "TEC is working on this now" || true
           gh label create agent-failed  --color b60205 --description "TEC stopped short"          || true
           gh label create done          --color 0e8a16 --description "Implemented and merged"     || true
+          # Applied by the inline QC gate further down when two rework rounds were not enough.
+          # It has to exist here too: this workflow is the only thing that runs in a repo whose
+          # qc-review.yml has never been triggered.
+          gh label create needs-po      --color 5319e7 --description "The PO is re-scoping the brief" || true
 
       # The "@tec" path joins the queue by taking the same label the app attaches, so there is
       # exactly one definition of "queued". Labels applied with GITHUB_TOKEN don't trigger
@@ -106,9 +110,11 @@ jobs:
           # Oldest first: the order the issues were opened is the order they get worked.
           # `agent-running` is excluded by construction — a claimed issue no longer has
           # `by-agent`. 100 is the ceiling for one drain; anything beyond waits for the next run.
-          # `needs-human` is the one label that takes an issue out of the queue for good: it is
-          # set after two failed QC rework rounds, and re-draining it would spend the day's quota
-          # on a change two agents have already agreed they cannot finish.
+          # `needs-human` is the one label that takes an issue out of the queue. It is no longer
+          # set by a failed rework round — QC hands those to the PO and the loop continues — so
+          # it now only appears when a repo set an AGENT_MAX_CYCLES ceiling and the loop reached
+          # it, or when a person put it there. Either way it means "stop and look", and
+          # re-draining it would spend the day's quota against that.
           queue="$(gh issue list --state open --label by-agent --limit 100 \
                      --json number,createdAt,title,labels \
                    | jq -c '[ .[] | select([.labels[].name] | index("needs-human") | not) ]
@@ -182,12 +188,78 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --remove-label by-agent --add-label agent-running
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout default branch
+          # IS THIS A REWORK ROUND?
+          #
+          # QC re-queues a rejected change by labelling the issue `needs-rework` + `by-agent`,
+          # and its objections are about *the branch that already exists* — "this state is
+          # missing an empty state", not "build it again". So when both the label and the branch
+          # are there, the run continues that branch instead of starting from the default one.
+          #
+          # Starting over was the old behaviour and it was wrong twice: the model was told to
+          # "keep everything QC did not object to" while looking at a working tree that held
+          # none of it, and the second attempt paid full price for work that was already done
+          # and already accepted.
+          #
+          # Both conditions are required. The label alone could be stale (a human may have
+          # deleted the branch), and the branch alone is not a reason to resume — a fresh `@tec`
+          # on an issue whose old branch was never cleaned up must still start clean.
+          BRANCH="tec/issue-${ISSUE_NUMBER}"
+          # `needs-po` counts as coming back too: the PO re-scopes the brief, it does not throw
+          # the implementation away, so TEC continues on the code it already wrote.
+          rework="$(printf '%s' "$issue" \
+            | jq -r '[.labels[].name] | (index("needs-rework") != null or index("needs-po") != null)')"
+          # `gh api`, not `git ls-remote`: this step runs BEFORE the checkout, so there is no
+          # working copy and no `origin` remote to ask yet.
+          if [ "$rework" = "true" ] &&
+             gh api "repos/${GH_REPO}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            echo "resume=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "::notice::#$ISSUE_NUMBER is coming back from QC — continuing on $BRANCH."
+          else
+            echo "resume=" >> "$GITHUB_OUTPUT"
+          fi
+
+          # QC hands an issue it has rejected twice to the PO instead of dropping it. The
+          # re-scope runs HERE, in TEC's own job, for the same reason the QC gate does: the
+          # comment and label QC wrote were made with GITHUB_TOKEN, which triggers no workflow,
+          # so anything waiting for one would wait forever.
+          if printf '%s' "$issue" | jq -e '[.labels[].name] | index("needs-po") != null' >/dev/null; then
+            echo "rebrief=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebrief=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # On a rework round this is the branch TEC already built, so the model opens its own
+      # previous attempt and edits it. Otherwise it is the default branch, as it always was.
+      - name: Checkout
         if: steps.claim.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          ref: ${{ steps.claim.outputs.resume || github.event.repository.default_branch || github.ref_name }}
           fetch-depth: 0
+
+      # Only on a rework round, and only because resuming introduces a problem starting fresh
+      # never had: the branch was cut from the default branch some rounds ago, and another pull
+      # request may have merged since. Left alone it would build and review against a stale
+      # base, then fail at `gh pr merge` with a conflict.
+      #
+      # A clean fast-forward or merge is taken; a conflict is NOT resolved here. Handing a
+      # half-merged tree to the model would have it "fix" conflict markers as if they were the
+      # issue, so the merge is aborted and the round continues on the branch as it stands — the
+      # work is kept, and the merge step at the end reports the conflict to a human, which is
+      # what it already does for any branch it cannot merge.
+      - name: Bring the resumed branch up to date
+        if: steps.claim.outputs.skip != 'true' && steps.claim.outputs.resume != ''
+        env:
+          RESUME_BRANCH: ${{ steps.claim.outputs.resume }}
+        run: |
+          git config user.name "mia-agent[bot]"
+          git config user.email "mia-agent[bot]@users.noreply.github.com"
+          if git merge --no-edit "origin/${DEFAULT_BRANCH}"; then
+            echo "$RESUME_BRANCH is up to date with $DEFAULT_BRANCH."
+          else
+            git merge --abort || true
+            echo "::warning::$RESUME_BRANCH conflicts with $DEFAULT_BRANCH — continuing on the branch as it stands; the merge at the end will report it."
+          fi
 
       - name: Set up JDK 17
         if: steps.claim.outputs.skip != 'true'
@@ -216,8 +288,66 @@ jobs:
       # It carries four things the issue text alone never does: how to work (orient → plan →
       # implement → verify), what this repo's conventions are, what "done" means for anything
       # a user can see, and a hard boundary around the untrusted issue text at the end.
+      # THE PO RE-SCOPE. Runs only when QC gave up on the brief rather than on the attempt, and
+      # only before the prompt is built, so TEC implements the brief that was just written.
+      #
+      # It never fails the job. po-rebrief.js is written to fail open — no key, a rate limit, an
+      # unusable answer all end with `needs-po` removed and the issue untouched — and the `||
+      # true` is the second belt: a loop that stops because its re-scope step errored would be
+      # the exact outcome this whole path exists to prevent.
+      - name: Let the PO re-scope the issue
+        if: steps.claim.outputs.skip != 'true' && steps.claim.outputs.rebrief == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # The PO's seat, not TEC's — re-scoping is the same job `@po` does on an issue.
+          AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REBRIEF_BODY_FILE: ${{ runner.temp }}/rebrief-body.txt
+          REBRIEF_TITLE_FILE: ${{ runner.temp }}/rebrief-title.txt
+          DIFF_FILE: ${{ runner.temp }}/attempt.diff
+          RESUME_BRANCH: ${{ steps.claim.outputs.resume }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # An older bootstrap has the workflow but not this script. Say so once and carry on
+          # with the brief as it stands — that is exactly the pre-re-scope behaviour.
+          if [ ! -f .github/scripts/po-rebrief.js ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "🧭 This repo has no \`.github/scripts/po-rebrief.js\`, so the PO could not re-scope this issue. TEC will continue with the brief as it stands. Update the AI-team files from the MIA app to enable the QC → PO → TEC loop."
+            gh issue edit "$ISSUE_NUMBER" --remove-label needs-po || true
+            exit 0
+          fi
+
+          # What TEC actually built, for the PO to design around. Only meaningful when the
+          # branch survived; when it did not, the objections alone are enough and the script
+          # says so itself.
+          if [ -n "$RESUME_BRANCH" ]; then
+            git diff "origin/${DEFAULT_BRANCH}...HEAD" > "${RUNNER_TEMP}/attempt.diff" || true
+          fi
+
+          node .github/scripts/po-rebrief.js || true
+
+          # The claim step cached the issue title and body BEFORE the rewrite. If the PO produced
+          # new ones, they replace that cache so the prompt below is built from the current brief
+          # — and so the pull request TEC opens is named after the brief it actually implemented,
+          # rather than the one that was rejected.
+          if [ -s "${RUNNER_TEMP}/rebrief-body.txt" ]; then
+            cp "${RUNNER_TEMP}/rebrief-body.txt" "${RUNNER_TEMP}/issue-body.txt"
+            [ -s "${RUNNER_TEMP}/rebrief-title.txt" ] &&
+              cp "${RUNNER_TEMP}/rebrief-title.txt" "${RUNNER_TEMP}/issue-title.txt"
+            echo "::notice::The PO re-scoped #$ISSUE_NUMBER; TEC is implementing the new brief."
+          fi
+        continue-on-error: true
+
       - name: Build the prompt
         if: steps.claim.outputs.skip != 'true'
+        env:
+          # Non-empty when the checkout above landed on TEC's own previous attempt rather than
+          # on the default branch. It changes what the prompt can honestly claim is in the tree.
+          RESUME_BRANCH: ${{ steps.claim.outputs.resume }}
         run: |
           prompt="${RUNNER_TEMP}/agent-prompt.txt"
 
@@ -305,9 +435,32 @@ jobs:
               echo
               echo "## Your previous attempt was rejected by QC"
               echo
-              echo "You already implemented this issue once and QC would not merge it. Fix exactly"
-              echo "what is listed below, keep everything that was not objected to, and do not"
-              echo "start the change over from scratch or add anything new."
+              echo "You already implemented this issue once and QC would not merge it."
+              if [ -n "$RESUME_BRANCH" ]; then
+                # The working tree IS the previous attempt, so say so plainly. Told only "do not
+                # start over" while looking at a checkout that did not contain the work, the
+                # model had no choice but to rewrite it — which is exactly what this run avoids.
+                echo "**The working tree you are looking at is that attempt**, checked out from"
+                echo "branch \`$RESUME_BRANCH\`. The files you changed last time are already"
+                echo "changed. Read them before you edit anything."
+                echo
+                echo "Fix exactly what is listed below and nothing else. Everything QC did not"
+                echo "object to has already been accepted — changing it costs another review"
+                echo "round. Do not re-implement what is already there, and do not add anything"
+                echo "the issue did not ask for."
+                echo
+                echo "These are the files your previous attempt touched:"
+                echo
+                echo '```'
+                git diff --stat "origin/${DEFAULT_BRANCH}...HEAD" | head -50
+                echo '```'
+              else
+                # The branch was deleted, or this repo predates resuming: the tree is clean, so
+                # the honest instruction is the opposite one.
+                echo "That attempt is **not** in this working tree — the branch it was on is gone,"
+                echo "so you are starting from the default branch. Implement the issue in full,"
+                echo "and make sure the finished result does not repeat the problems below."
+              fi
               echo
               echo "===== BEGIN QC NOTES ====="
               printf '%s\n' "$notes"
@@ -946,6 +1099,9 @@ jobs:
         if: steps.ladder.outputs.status == 'ok'
         env:
           BUILD_ATTEMPTS: ${{ steps.ladder.outputs.attempts }}
+          # Non-empty when this run continued an existing branch after QC sent it back: the
+          # branch already exists, the pull request is already open, and neither may be replaced.
+          RESUME_BRANCH: ${{ steps.claim.outputs.resume }}
           # The QC gate below runs the review script in this job, so it spends the same keys and
           # the same model as every other role — see .github/scripts/ai-provider.js.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -960,6 +1116,9 @@ jobs:
           # Not inherited from the job's AGENT_PROVIDER: that one is TEC's, and QC may be on
           # another service entirely, which would mean another key and another host.
           AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
+          # How many PO re-scopes one issue may have before it is paused for a human. Unset or 0
+          # means the QC → PO → TEC loop never stops on its own, which is the default.
+          AGENT_MAX_CYCLES: ${{ vars.AGENT_MAX_CYCLES }}
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -975,20 +1134,41 @@ jobs:
 
           ISSUE_TITLE="$(cat "${RUNNER_TEMP}/issue-title.txt")"
           BRANCH="tec/issue-${ISSUE_NUMBER}"
-          git checkout -b "$BRANCH"
+
+          # A REWORK ROUND ADDS A COMMIT; A FIRST ATTEMPT CREATES THE BRANCH.
+          #
+          # On a rework round the checkout already put us on $BRANCH, so there is nothing to
+          # create — and nothing to delete either. The branch must survive: the open pull
+          # request points at it, the accepted part of the work lives on it, and deleting it
+          # would close the PR QC is reviewing and throw away the history of how many rounds
+          # this took.
+          if [ -n "$RESUME_BRANCH" ]; then
+            SUBJECT="tec: rework #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+          else
+            git checkout -b "$BRANCH"
+            SUBJECT="tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+          fi
+
           git add -A
           # The commit itself records what producing it cost (git trailer, machine-readable
           # via `git log --format=%(trailers:key=Token-Spend)`).
           TRAILER="$(cat "${RUNNER_TEMP}/token-trailer.txt" 2>/dev/null || true)"
           if [ -n "$TRAILER" ]; then
-            git commit -m "tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}" -m "$TRAILER"
+            git commit -m "$SUBJECT" -m "$TRAILER"
           else
-            git commit -m "tec: resolve #${ISSUE_NUMBER} — ${ISSUE_TITLE}"
+            git commit -m "$SUBJECT"
           fi
 
-          # Clear any stale branch from a previous run, then push fresh (no force needed).
-          git push origin --delete "$BRANCH" 2>/dev/null || true
-          git push -u origin "$BRANCH"
+          if [ -n "$RESUME_BRANCH" ]; then
+            # Fast-forward on top of what is already there — no force, so a human who pushed a
+            # fix to this branch while QC was reviewing is not overwritten. If someone did, the
+            # push is rejected and the run fails loudly rather than silently discarding it.
+            git push origin "$BRANCH"
+          else
+            # Clear any stale branch from a previous run, then push fresh (no force needed).
+            git push origin --delete "$BRANCH" 2>/dev/null || true
+            git push -u origin "$BRANCH"
+          fi
 
           # PR body auto-closes the issue on merge, and carries the spend report so the cost is
           # visible on the change itself, not only on the issue. printf keeps the blank lines intact.
@@ -1013,6 +1193,16 @@ jobs:
             --body "$PR_BODY" 2>/dev/null)" || true
           if [ -z "$PR_URL" ]; then
             PR_URL="$(gh pr view "$BRANCH" --json url -q .url 2>/dev/null || true)"
+          fi
+
+          # A rework round pushes onto a pull request that is already open, so `gh pr create`
+          # above failed and the fallback found the existing one. Its body still describes the
+          # FIRST attempt — accurate history, and not worth rewriting — so the new round is
+          # recorded as a comment instead. Without this, the PR would silently gain commits and
+          # a reader would have no idea what each round cost or which model wrote it.
+          if [ -n "$RESUME_BRANCH" ] && [ -n "$PR_URL" ]; then
+            gh pr comment "$PR_URL" --body "$(printf '🔧 **Reworked after QC.** %s.\n\n%s%s' \
+              "$WHO" "$REPAIRS" "$REPORT")" || true
           fi
 
           # THE QC GATE. The same script qc-review.yml runs, invoked HERE, inline, before the

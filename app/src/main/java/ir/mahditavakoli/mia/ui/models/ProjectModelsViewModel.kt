@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
+import ir.mahditavakoli.mia.data.repository.TeamFilesUpdater
 import ir.mahditavakoli.mia.network.NetworkModule
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 import ir.mahditavakoli.mia.network.openrouter.AgentRole
@@ -37,7 +38,17 @@ data class ProjectModelsUiState(
     val expandedRole: AgentRole? = null,
     val errorMessage: String? = null,
     /** Set after a successful apply, describing what actually landed on GitHub. */
-    val resultMessage: String? = null
+    val resultMessage: String? = null,
+    /** True while the repo's `.github` files are being rewritten to this build's versions. */
+    val isUpdatingFiles: Boolean = false,
+    /**
+     * True when the last read found files too old to hold a model per role. It is the one
+     * condition the update button exists to fix, so the screen offers it rather than only
+     * reporting it after a failed apply.
+     */
+    val filesAreOutdated: Boolean = false,
+    /** Non-null while the update-files confirmation is showing. */
+    val confirmUpdateFiles: Boolean = false
 ) {
     /** The model shown for [role]: the pending pick if there is one, else what the repo says. */
     fun modelFor(role: AgentRole): String? =
@@ -51,7 +62,8 @@ data class ProjectModelsUiState(
         get() = draft.filterKeys { it != AgentRole.APP }
             .filter { (role, model) -> saved[role] != model }
 
-    val canApply: Boolean get() = !isLoading && !isApplying && pendingChanges.isNotEmpty()
+    val canApply: Boolean
+        get() = !isLoading && !isApplying && !isUpdatingFiles && pendingChanges.isNotEmpty()
 
     /**
      * True when something the user is about to write runs on the user's own MiniMax account.
@@ -89,14 +101,19 @@ class ProjectModelsViewModel(application: Application) : AndroidViewModel(applic
         }
         viewModelScope.launch {
             gitHubRepository.agentModelsFor(projectName).fold(
-                onSuccess = { models ->
+                onSuccess = { report ->
+                    val models = report.models
                     _uiState.update { state ->
                         state.copy(
                             isLoading = false,
                             saved = models,
                             // Any pick that is now what the repo says is no longer a change.
                             draft = state.draft.filter { (role, id) -> models[role] != id },
-                            appModel = secretStore.textModelId
+                            appModel = secretStore.textModelId,
+                            // A repo that HAS the files but cannot hold a model per role is the
+                            // case the update button fixes. One that has no team files at all is
+                            // not — there is nothing there to bring up to date.
+                            filesAreOutdated = !report.isNotATeamRepo && !report.roleScoped
                         )
                     }
                 },
@@ -129,6 +146,47 @@ class ProjectModelsViewModel(application: Application) : AndroidViewModel(applic
         }
         _uiState.update {
             it.copy(draft = it.draft + (role to modelId), expandedRole = null, resultMessage = null)
+        }
+    }
+
+    // Updating the repo's own AI-team files ---------------------------------------------------
+
+    fun onUpdateFilesClick() {
+        _uiState.update { it.copy(confirmUpdateFiles = true) }
+    }
+
+    fun onDismissUpdateFiles() {
+        if (_uiState.value.isUpdatingFiles) return
+        _uiState.update { it.copy(confirmUpdateFiles = false) }
+    }
+
+    /**
+     * Rewrites this project's `.github` AI-team files to the versions this build ships, then
+     * re-reads the models so the screen shows what the repo says rather than what was asked for.
+     *
+     * The models the repo already runs are carried across by the updater itself — a repo whose
+     * QC sits on a bigger model must still be that way afterwards — so the app's own defaults
+     * only fill in roles the repo names nowhere.
+     */
+    fun onConfirmUpdateFiles() {
+        val state = _uiState.value
+        if (state.isUpdatingFiles) return
+        _uiState.update { it.copy(isUpdatingFiles = true, confirmUpdateFiles = false, resultMessage = null) }
+        viewModelScope.launch {
+            gitHubRepository.updateTeamFiles(
+                projectName = state.projectName,
+                fallbackModels = secretStore.defaultModels().filterKeys { it.envSuffix != null }
+            ).fold(
+                onSuccess = { outcome ->
+                    _uiState.update { it.copy(isUpdatingFiles = false, resultMessage = outcome.asPersianMessage()) }
+                    _events.trySend(outcome.asPersianMessage())
+                    load(state.projectName)
+                },
+                onFailure = { error ->
+                    _uiState.update { it.copy(isUpdatingFiles = false) }
+                    _events.trySend(error.toPersianMessage("به‌روزرسانی فایل‌های تیم ناموفق بود"))
+                }
+            )
         }
     }
 
@@ -205,4 +263,23 @@ internal fun AgentModelMigrator.Outcome.asPersianMessage(): String {
 
         else -> "$roles از قبل روی همین مدل بود؛ چیزی تغییر نکرد."
     }
+}
+
+/** What the file update actually did, in one line — the same shape as the model message. */
+internal fun TeamFilesUpdater.Outcome.asPersianMessage(): String = when {
+    failed.isNotEmpty() && !didChange ->
+        "هیچ فایلی به‌روزرسانی نشد: ${failed.joinToString("، ") { "${it.first} (${it.second})" }}"
+
+    failed.isNotEmpty() ->
+        "$changedCount فایل به‌روزرسانی شد، اما ${failed.size} فایل ناموفق بود: " +
+            failed.joinToString("، ") { "${it.first} (${it.second})" }
+
+    added.isNotEmpty() && updated.isNotEmpty() ->
+        "${updated.size} فایل به‌روز شد و ${added.size} فایل تازه اضافه شد؛ مدل هر نقش حفظ شد."
+
+    added.isNotEmpty() -> "${added.size} فایل تازه به مخزن اضافه شد؛ مدل هر نقش حفظ شد."
+
+    updated.isNotEmpty() -> "${updated.size} فایل تیم AI به‌روزرسانی شد؛ مدل هر نقش حفظ شد."
+
+    else -> "فایل‌های تیم AI این مخزن از قبل به‌روز بودند."
 }

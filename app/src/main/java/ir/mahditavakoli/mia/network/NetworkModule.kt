@@ -8,6 +8,7 @@ import ir.mahditavakoli.mia.data.repository.AgentTeamFiles
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
+import ir.mahditavakoli.mia.data.repository.TeamFilesUpdater
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.github.GitHubApi
@@ -78,6 +79,7 @@ object NetworkModule {
         "preview-web.yml" to ".github/workflows/preview-web.yml",
         "ai-provider.js" to ".github/scripts/ai-provider.js",
         "ai-role-review.js" to ".github/scripts/ai-role-review.js",
+        "po-rebrief.js" to ".github/scripts/po-rebrief.js",
         "decompose-brief.js" to ".github/scripts/decompose-brief.js",
         "qc-review.js" to ".github/scripts/qc-review.js",
         "token-usage.js" to ".github/scripts/token-usage.js",
@@ -123,6 +125,20 @@ object NetworkModule {
         )
     }
 
+    /**
+     * Brings an existing repo's `.github` files up to this build's — the counterpart to
+     * [repoBootstrapper], which can only ever install them into a repo it is creating.
+     */
+    val teamFilesUpdater: TeamFilesUpdater by lazy {
+        TeamFilesUpdater(
+            api = gitHubApi,
+            base64 = AndroidBase64Encoder,
+            base64Decoder = AndroidBase64Decoder,
+            currentFiles = ::readBootstrapFiles,
+            migrator = agentModelMigrator
+        )
+    }
+
     /** Wires new repos up to the AI team (workflows + script, labels, secret). */
     val repoBootstrapper: RepoBootstrapper by lazy {
         RepoBootstrapper(
@@ -147,6 +163,7 @@ object NetworkModule {
             isConfigured = isGitHubConfigured,
             bootstrapper = repoBootstrapper,
             agentModelMigrator = agentModelMigrator,
+            teamFilesUpdater = teamFilesUpdater,
             agentApiKeyProvider = { secretStore.agentApiKey },
             agentFallbackApiKeyProvider = { secretStore.agentFallbackApiKey },
             miniMaxApiKeyProvider = { secretStore.miniMaxApiKey }

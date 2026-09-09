@@ -12,8 +12,20 @@
 // block every merge in the repo, so every failure path here ends in `qc-skipped` and today's
 // behaviour. The gate can only ever *stop* a merge when the model actually said "rework".
 //
-// Two rounds of rework, then `needs-human`: two agents are perfectly capable of handing work back
-// and forth until the day's quota is gone, and neither of them will notice.
+// THE LOOP DOES NOT END WITH THE WORK ABANDONED.
+//
+// Two rounds of TEC rework, and then the issue goes to the PO rather than to a dead `needs-human`
+// state. A change QC rejects twice is usually not a coding failure at all — it is an issue that
+// never said clearly enough what "done" meant — so the answer is to re-scope it, not to give up
+// on it. The PO rewrites the brief (see po-rebrief.js, which TEC runs before its next attempt),
+// the rework counter starts again against that new brief, and TEC keeps the branch it already
+// built. QC → TEC → QC → PO → TEC → QC … the work is never dropped.
+//
+// The original concern behind the old hard stop is real and has not gone away: two agents can
+// hand work back and forth until the day's free quota is gone and nobody notices. That is what
+// AGENT_MAX_CYCLES is for — a ceiling on PO re-scopes, after which the issue is PAUSED for a
+// human rather than abandoned. It defaults to 0, meaning no ceiling, because a task that stops
+// being worked on is the failure this loop exists to prevent.
 
 const fs = require("fs");
 const {
@@ -41,12 +53,29 @@ const APPROVED_LABEL = "qc-approved";
 const REWORK_LABEL = "needs-rework";
 const SKIPPED_LABEL = "qc-skipped";
 const HUMAN_LABEL = "needs-human";
+const PO_LABEL = "needs-po";
 const AGENT_LABEL = "by-agent";
 
 /** Marks QC's rework notes so the TEC prompt can find the latest set, and count the rounds. */
 const REWORK_MARKER = "<!-- qc-rework -->";
 
+/**
+ * Marks a PO re-scope. Written by po-rebrief.js, read here: every rework round before it belongs
+ * to a brief that no longer exists, so the count restarts from it. Without that, the second
+ * cycle would start already over the cap and the loop would stall on its first QC objection.
+ */
+const REBRIEF_MARKER = "<!-- po-rebrief -->";
+
 const MAX_ROUNDS = 2;
+
+/**
+ * How many times the PO may re-scope one issue before it is paused for a human. 0 — the default —
+ * means never pause: the loop keeps going, which is the whole point of it.
+ *
+ * Set it to a small number on a repo running free models if you would rather the day's quota
+ * survive an issue that two agents cannot agree on.
+ */
+const MAX_CYCLES = Number.parseInt(process.env.AGENT_MAX_CYCLES || "0", 10) || 0;
 const DIFF_LIMIT = 40000;
 
 // QC's own model: AGENT_MODEL_QC when the repo sets one, the repo-wide AGENT_MODEL
@@ -147,10 +176,24 @@ function acceptanceCriteria(body) {
   return criteria;
 }
 
-/** How many rework rounds this issue has already had, from QC's own marked comments. */
-async function reworkRounds() {
+/**
+ * How many rework rounds this issue has had **against the brief it currently has**, and how many
+ * times the PO has re-scoped it, from the marked comments the two roles leave behind.
+ *
+ * Counting from the last re-scope is what makes the cycle work: the objections QC raised against
+ * the old brief were answered by rewriting the brief, so they must not also count against TEC's
+ * attempts at the new one. Comments are the record rather than labels because a label can be
+ * added and removed by anyone, while these survive a re-run and cannot be reset by relabelling.
+ */
+async function loopState() {
   const comments = await gh(`/issues/${issueNumber}/comments?per_page=100`).catch(() => []);
-  return comments.filter((c) => (c.body || "").includes(REWORK_MARKER)).length;
+  const bodies = comments.map((c) => c.body || "");
+  const cycles = bodies.filter((b) => b.includes(REBRIEF_MARKER)).length;
+  const lastRebrief = bodies.map((b) => b.includes(REBRIEF_MARKER)).lastIndexOf(true);
+  const rounds = bodies
+    .slice(lastRebrief + 1)
+    .filter((b) => b.includes(REWORK_MARKER)).length;
+  return { rounds, cycles };
 }
 
 // --- Validation -----------------------------------------------------------------------------
@@ -341,6 +384,11 @@ async function main() {
   if (review.verdict === "approve") {
     reportVerdict("approve");
     await label(prNumber, [APPROVED_LABEL]);
+    // The issue is no longer in a rework state, and this is the only place that can know it.
+    // Left behind, the label reads as "still rejected" on a change that is about to merge —
+    // and TEC's own claim step uses it to decide whether to resume a branch, so a stale one
+    // would be a lie told to the next run.
+    await unlabel(issueNumber, REWORK_LABEL);
     await commentOnPr(
       `✅ **QC approves this pull request.**\n\n${table}\n\n` +
         (review.blocking.length
@@ -353,9 +401,10 @@ async function main() {
     return;
   }
 
-  // Rework. The round count comes from QC's own marked comments on the issue, so it survives a
+  // Rework. The counts come from the roles' own marked comments on the issue, so they survive a
   // re-run of this workflow and cannot be reset by relabelling.
-  const round = (await reworkRounds()) + 1;
+  const { rounds, cycles } = await loopState();
+  const round = rounds + 1;
   const blockingList = review.blocking.map((item) => `- ${item}`).join("\n");
   reportVerdict("rework");
 
@@ -371,16 +420,44 @@ async function main() {
   );
 
   if (round > MAX_ROUNDS) {
-    // The point of the cap: two agents will otherwise pass this back and forth until the daily
-    // quota is gone, and nobody is watching.
-    await label(issueNumber, [HUMAN_LABEL]);
+    // TEC HAS HAD ITS TURNS — HAND THE ISSUE TO THE PO, DO NOT DROP IT.
+    //
+    // Two attempts that both failed the same acceptance criteria is rarely a coding problem. It
+    // is an issue that did not say precisely enough what "done" looks like, and asking TEC a
+    // third time in the same words would spend another round to learn that again. So the PO
+    // re-scopes it — po-rebrief.js, which TEC runs before its next attempt — and the counter
+    // restarts against the new brief.
+    if (MAX_CYCLES > 0 && cycles >= MAX_CYCLES) {
+      // Only reachable when the repo asked for a ceiling. The issue is PAUSED, not abandoned:
+      // everything is still on the branch and the pull request is still open.
+      await label(issueNumber, [HUMAN_LABEL]);
+      await commentOnIssue(
+        `⏸️ **Paused for a human.** The PO has already re-scoped this ${cycles} time(s) ` +
+          `(\`AGENT_MAX_CYCLES=${MAX_CYCLES}\`) and QC still will not pass it.\n\n` +
+          `Nothing has been thrown away — the work is on \`tec/issue-${issueNumber}\` and QC's ` +
+          `remaining objections are on #${prNumber}. Sharpen the issue by hand, then comment ` +
+          "`@tec` to queue it deliberately, or raise `AGENT_MAX_CYCLES` to let the loop continue."
+      );
+      console.log(`Cycle ceiling reached; issue #${issueNumber} paused for a human.`);
+      return;
+    }
+
+    // The objections from THIS cycle are what the PO has to design around, so they go on the
+    // issue under the rework marker exactly as a normal round would — po-rebrief.js reads them.
     await commentOnIssue(
-      `🙋 **This issue needs a human.** QC has asked for rework ${MAX_ROUNDS} time(s) already and ` +
-        `the change still does not meet its acceptance criteria, so it is not being re-queued ` +
-        `again.\n\nQC's remaining objections are on #${prNumber}. Sharpen the issue (or fix it by ` +
-        "hand), then comment `@tec` to queue it deliberately."
+      `${REWORK_MARKER}\n🛑 **QC rework round ${round}** — from the review of #${prNumber}:\n\n` +
+        `${blockingList}`
     );
-    console.log(`QC rework cap reached; issue #${issueNumber} handed to a human.`);
+    await unlabel(issueNumber, REWORK_LABEL);
+    await label(issueNumber, [PO_LABEL, AGENT_LABEL]);
+    await commentOnIssue(
+      `🧭 **Handing this to the PO.** QC has asked for rework ${MAX_ROUNDS} time(s) against the ` +
+        `current brief, so the brief itself is the problem, not the attempt.\n\n` +
+        "The PO will re-scope this issue from QC's objections and the change TEC actually made, " +
+        "and TEC will then continue on the same branch against the new brief. Nothing is being " +
+        "abandoned and no work is thrown away."
+    );
+    console.log(`QC rework cap reached; issue #${issueNumber} handed to the PO (cycle ${cycles + 1}).`);
     return;
   }
 

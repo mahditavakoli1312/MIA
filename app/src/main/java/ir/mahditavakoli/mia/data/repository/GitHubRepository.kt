@@ -35,6 +35,8 @@ class GitHubRepository(
     val isConfigured: Boolean,
     private val bootstrapper: RepoBootstrapper,
     private val agentModelMigrator: AgentModelMigrator,
+    /** Refreshes an existing repo's `.github` AI-team files — see [updateTeamFiles]. */
+    private val teamFilesUpdater: TeamFilesUpdater,
     /**
      * The OpenRouter keys pushed into each new repo as Actions secrets, read at the moment a
      * repo is created rather than captured up front — a key the user saves in Settings must
@@ -360,9 +362,8 @@ class GitHubRepository(
      * missing that workflow. A repo from before role-scoped models answers the same id for every
      * role, which is exactly what it runs.
      */
-    suspend fun agentModelsFor(projectName: String): Result<Map<AgentRole, String>> = runCatching {
-        agentModelMigrator.currentModels(owner(), repoNameFor(projectName))
-    }
+    suspend fun agentModelsFor(projectName: String): Result<AgentModelMigrator.TeamFiles> =
+        runCatching { agentModelMigrator.report(owner(), repoNameFor(projectName)) }
 
     /**
      * Repoints this project's repo at [model]. See [AgentModelMigrator] for what that rewrites.
@@ -402,6 +403,22 @@ class GitHubRepository(
             .mapNotNull { provider -> ensureProviderSecret(owner, repo, provider) }
         val outcome = agentModelMigrator.setModels(owner, repo, models)
         outcome.copy(failed = outcome.failed + secretWarnings)
+    }
+
+    /**
+     * Rewrites this project's repo `.github` AI-team files to the versions this build ships,
+     * keeping whatever models the repo already runs each role on.
+     *
+     * It is the answer to every "these files are too old" message the model screen can produce:
+     * a repo with one shared `AGENT_MODEL` cannot give QC its own model, and one from before the
+     * QC → PO → TEC loop stops at `needs-human` instead of re-scoping. Neither is fixable from
+     * the app without replacing the files themselves.
+     */
+    suspend fun updateTeamFiles(
+        projectName: String,
+        fallbackModels: Map<AgentRole, String>
+    ): Result<TeamFilesUpdater.Outcome> = runCatching {
+        teamFilesUpdater.update(owner(), repoNameFor(projectName), fallbackModels)
     }
 
     /**
