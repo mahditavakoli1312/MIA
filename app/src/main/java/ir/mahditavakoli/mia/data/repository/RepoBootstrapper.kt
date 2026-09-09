@@ -38,10 +38,10 @@ data class BootstrapFile(val repoPath: String, val content: String)
 /**
  * Wires a freshly created repository up to the whole MIA "AI team":
  *   1. creates the repo (plain, or from [MIA_TEMPLATE_REPO] if set),
- *   2. commits the [files] — the TEC coding agent, the PO/QC advisor workflow + script, the
- *      add-to-project and CI workflows (skipped for the template route, since the template
- *      already carries them),
- *   3. creates the `by-agent` / `done` labels,
+ *   2. commits the [files] — the TEC coding agent, the PO/QC advisor workflow + script, the PO
+ *      brief decomposer, the add-to-project and CI workflows (skipped for the template route,
+ *      since the template already carries them),
+ *   3. creates the queue and brief labels (see [LABELS]),
  *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
  *      (the free-model key that powers CI + PO + TEC + QC), plus the spare key as
  *      `OPENROUTER_API_KEY_FALLBACK` for the workflows to switch to on a 429, and the MiniMax
@@ -216,16 +216,31 @@ class RepoBootstrapper(
         const val MINIMAX_SECRET_NAME = "MINIMAX_API_KEY"
 
         /**
-         * The labels the agent queue runs on, created up front so the workflow can move an
-         * issue between them (adding a label to an issue does not create a missing one).
-         * `by-agent` means queued, `agent-running` means claimed, and the last two are the two
-         * ways it ends. GitHub label colors are 6-digit hex without a leading '#'.
+         * The labels the pipeline runs on, created up front so the workflows can move an issue
+         * between them (adding a label to an issue does not create a missing one). GitHub label
+         * colors are 6-digit hex without a leading '#'.
+         *
+         * The first four are the TEC queue: `by-agent` means queued, `agent-running` means
+         * claimed, and the next two are the ways it ends. Then the brief pipeline: `brief` is an
+         * intent waiting to be decomposed, `brief-planned`/`brief-failed` are how that ended, and
+         * `blocked` marks a child issue whose prerequisites have not landed. The last four are the
+         * QC gate on TEC's pull requests: `qc-approved` / `qc-skipped` let a merge through,
+         * `needs-rework` sends the issue back once more, and `needs-human` is where two failed
+         * rework rounds end — the one label that takes an issue out of the queue for good.
          */
         val LABELS = listOf(
             "by-agent" to "1d76db",
             "agent-running" to "fbca04",
             "agent-failed" to "b60205",
-            "done" to "0e8a16"
+            "done" to "0e8a16",
+            "brief" to "6f42c1",
+            "brief-planned" to "5319e7",
+            "brief-failed" to "b60205",
+            "blocked" to "d93f0b",
+            "qc-approved" to "0e8a16",
+            "qc-skipped" to "bfd4f2",
+            "needs-rework" to "d93f0b",
+            "needs-human" to "b60205"
         )
     }
 }

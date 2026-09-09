@@ -8,6 +8,7 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Query
 
@@ -18,6 +19,17 @@ data class CreateProjectBody(val name: String)
 data class CreateTaskBody(
     @SerialName("project_id") val projectId: String,
     val title: String,
+    @SerialName("due_date") val dueDate: String? = null
+)
+
+/**
+ * Partial update of one task. Every field is nullable-and-omitted-when-null so a PATCH carries
+ * only the column it means to change: PostgREST would otherwise read an absent field as an
+ * explicit null and, for example, wipe a due date while closing a task.
+ */
+@Serializable
+data class UpdateTaskBody(
+    @SerialName("is_done") val isDone: Boolean? = null,
     @SerialName("due_date") val dueDate: String? = null
 )
 
@@ -59,6 +71,27 @@ interface SupabaseApi {
 
     @POST("tasks")
     suspend fun createTask(@Body body: CreateTaskBody): List<Task>
+
+    // Same reason as the deletes above: "Prefer: return=representation" makes PostgREST answer
+    // a PATCH with the updated rows, which a bare `Unit` return type cannot deserialize.
+    @PATCH("tasks")
+    suspend fun updateTaskById(
+        @Query("id") idFilter: String, // e.g. "eq.<uuid>"
+        @Body body: UpdateTaskBody
+    ): Response<Unit>
+
+    /**
+     * The same PATCH aimed at many rows at once, with an `in.(id,id,…)` filter.
+     *
+     * Separate from [updateTaskById] only so the filter each one expects is visible in its name;
+     * PostgREST makes no distinction. Used by the GitHub→Supabase sync, which decides what to
+     * close by comparing two whole lists and would otherwise spend one request per task.
+     */
+    @PATCH("tasks")
+    suspend fun updateTasksByIds(
+        @Query("id") idFilter: String, // e.g. "in.(<uuid>,<uuid>)"
+        @Body body: UpdateTaskBody
+    ): Response<Unit>
 
     @DELETE("tasks")
     suspend fun deleteTaskById(@Query("id") idFilter: String): Response<Unit>

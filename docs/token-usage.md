@@ -144,24 +144,33 @@ TEC گران‌ترین بازیگر است: OpenCode یک ایجنت واقعی
 <div dir="ltr">
 
 ```
-Read OpenRouter credits (before)   ← GET /api/v1/key  → data.usage
+Run the model ladder  ─ for each model on AGENT_MODEL_LADDER (default: just AGENT_MODEL):
+        │
+        ├─ credits (before)        ← GET /api/v1/key → data.usage
+        ├─ run-agent.sh            ← --format json | tee opencode-rung-<n>.log
+        ├─ scope-guard.sh          ← reject a diff the issue never asked for
+        ├─ build-gate.sh           ← assembleDebug, up to 3 attempts; each repair
+        │                            APPENDS its tokens to the same rung log
+        ├─ credits (after)         ← GET /api/v1/key → data.usage
+        └─ node .github/scripts/token-usage.js   ← ONE report per rung
+              ├─ posts the issue comment (labelled with that rung's model)
+              ├─ writes token-report.md   → used in the PR body
+              └─ writes token-trailer.txt → used in the commit message
         ▼
-Run OpenCode CLI                   ← --format json | tee opencode-output.log
-        ▼
-Read OpenRouter credits (after)    ← GET /api/v1/key  → data.usage
-        ▼
-Report token spend                 ← node .github/scripts/token-usage.js
-        │   ├─ posts the issue comment
-        │   ├─ writes token-report.md   → used in the PR body
-        │   └─ writes token-trailer.txt → used in the commit message
-        ▼
-(quota / error / build-gate steps that may fail the job)
+(quota / error / scope / build-gate steps that may fail the job)
 ```
 
 </div>
 
 **ترتیب مراحل عمدی است.** گزارش مصرف **قبل از** هر مرحله‌ای که می‌تواند جاب را شکست بدهد اجرا
 می‌شود؛ چون وقتی TEC به سقف رایگان می‌خورد یا build می‌شکند، دانستن هزینه از همیشه مهم‌تر است.
+
+**حلقهٔ ترمیم build و نردبان مدل هر دو داخل همین حساب‌وکتاب‌اند، نه بیرونش.** هر تلاش ترمیم
+خروجی‌اش را به لاگِ همان رونگ **اضافه** می‌کند (append، نه بازنویسی)، پس توکن سه بیلد در یک عدد
+جمع می‌شود؛ و هر رونگِ `AGENT_MODEL_LADDER` گزارش جداگانهٔ خودش را با نام مدل خودش روی ایشو
+می‌گذارد. بنابراین ایشو نشان می‌دهد هر مدل چه هزینه‌ای داشت و آیا جواب داد یا نه. فایل‌های
+`token-report.md` / `token-trailer.txt` را هر رونگ بازنویسی می‌کند، پس آخرین گزارش — برای اجرای
+موفق، همان رونگی که تغییر را ساخت — به PR و پیام کامیت می‌رسد.
 
 سه جایی که TEC هزینه را ثبت می‌کند:
 
@@ -170,6 +179,11 @@ Report token spend                 ← node .github/scripts/token-usage.js
 | **کامنت ایشو** | جدول کامل توکن + هزینهٔ دلاری | جای طبیعی برای دیدن هزینهٔ یک تسک |
 | **بدنهٔ PR** | همان گزارش | هزینه کنار خودِ تغییرات دیده شود |
 | **پیام کامیت** | تریلر `Token-Spend:` | ماشین‌خوان و دائمی؛ با `git log` قابل جمع‌زدن |
+
+روی نردبانِ چندرونگی، کامنتِ هر رونگ یک خط ایتالیک هم دارد (`RUNG_NOTE`) که می‌گوید رونگ چندم از
+چند بود و چطور تمام شد — «green after 2 build attempt(s)» یا «the build never went green after 3
+attempt(s)». تریلرِ `Token-Spend:` هم همیشه با ` via <model>` نام مدل را حمل می‌کند، پس جمع‌زدنِ
+`git log` در بخش ۸ به‌تفکیک مدل هم قابل انجام است.
 
 تریلر هم به کامیت شاخه و هم (با `gh pr merge --body`) به کامیتِ squash روی شاخهٔ پیش‌فرض می‌رود، پس
 بعد از پاک شدن شاخه هم باقی می‌ماند.
@@ -347,6 +361,22 @@ gh issue view 12 --comments | grep -E '🧾|💸|Total'
 
 </div>
 
+### همین کار، داخل اپ
+
+صفحهٔ **«هزینهٔ توکن»** (آیکن نمودار در نوار بالای صفحهٔ اصلی) همین جمع‌زدن را برای **همهٔ**
+پروژه‌ها با هم انجام می‌دهد: تریلرهای `Token-Spend:` را از commits API می‌خواند، پاورقی‌های PO/QC را
+با یک فراخوانی repo-wide به کامنت‌ها، و سهم خودِ MIA را از دفتر محلی روی دستگاه. خروجی: نمودار
+هشت هفتهٔ اخیر، تفکیک به نقش و به مدل، پنج ایشوی گران‌ترین، و یک بودجهٔ ماهانه که از ۸۰٪ قرمز می‌شود.
+
+دو نکته که صفحه صریحاً می‌گوید و این‌جا هم باید گفته شود:
+
+- **کامنتِ `### 💸 Token spend` خودِ TEC خوانده نمی‌شود.** همان هزینه‌ای است که تریلر کامیت حمل
+  می‌کند، و خواندن هر دو هر اجرای ایجنت را دو برابر می‌شمرد. تریلر منبع است، چون بعد از پاک‌شدن
+  شاخه هم می‌ماند.
+- **جمع، یک کف است نه یک عدد نهایی.** MIA سه صفحه از کامیت‌ها و سه صفحه از کامنت‌های هر مخزن را
+  می‌خواند؛ اگر ته تاریخچه نرسد، تیتر «جمع کل (دست‌کم)» می‌شود. هزینهٔ گزارش‌نشده هم هرگز `$0.00`
+  نمایش داده نمی‌شود — «رایگان» و «نمی‌دانیم» دو چیز متفاوت‌اند.
+
 ---
 
 ## ۹. پیکربندی
@@ -401,10 +431,17 @@ gh issue view 12 --comments | grep -E '🧾|💸|Total'
 | `data/repository/IntentExecutionRepository.kt` | Threads usage through, computes the shared-by count |
 | `data/repository/GitHubRepository.kt` | Appends the footer to the issue body |
 | `ui/main/MainViewModel.kt` | Adds the spend line to the confirmation snackbar |
+| `data/model/TokenSpend.kt` | The read side's shapes: entries, weekly buckets, slices, totals |
+| `data/repository/SpendParsing.kt` | Reads spend back out of trailers and comment footers |
+| `data/repository/SpendRepository.kt` | Gathers every project's spend; marks a paged read truncated |
+| `data/repository/LocalSpendStore.kt` | MIA's own calls, which leave no record on GitHub |
+| `ui/spend/SpendScreen.kt` | The spend screen: chart, breakdowns, top issues, budget |
 | `docs/github/scripts/token-usage.js` | Parses the OpenCode stream, posts TEC's spend comment |
 | `docs/github/scripts/ai-role-review.js` | Per-role + total spend on PO/QC replies |
 | `docs/github/workflows/agent-issue-worker.yml` | Credit snapshots, JSON stream, report step, commit trailer |
 | `app/src/test/…/TokenUsageTest.kt` | Footer/total/locale contract |
+| `app/src/test/…/SpendParsingTest.kt` | The contract with the strings `.github/scripts/` writes |
+| `app/src/test/…/SpendReportTest.kt` | The screen's arithmetic: buckets, ranking, budget |
 
 </div>
 

@@ -32,8 +32,9 @@ import ir.mahditavakoli.mia.network.openrouter.AgentProvider
  * the OpenRouter API key — which powers both typed commands in the app and the CI agent, as each
  * repo's `OPENROUTER_API_KEY` Actions secret — an optional spare OpenRouter key that takes over
  * when the primary one hits its free-tier limit, the MiniMax platform key for the paid
- * `MiniMax-M3` option, which model MIA's own typed commands run on, and whether new tasks are
- * agent-handled by default.
+ * `MiniMax-M3` option, which model MIA's own typed commands run on, whether new tasks are
+ * agent-handled by default, and whether an understood command is shown for approval before it
+ * runs.
  *
  * The model picker here is deliberately **not** the same one as [AgentModelDialog]: this chooses
  * what runs on the phone, that chooses what runs in a repo's GitHub Actions. They share the model
@@ -42,12 +43,14 @@ import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 @Composable
 fun SettingsDialog(
     agentHandledByDefault: Boolean,
+    confirmBeforeExecute: Boolean,
     geminiApiKey: String,
     openRouterApiKey: String,
     openRouterFallbackApiKey: String,
     miniMaxApiKey: String,
     textModelId: String,
     onAgentHandledChange: (Boolean) -> Unit,
+    onConfirmBeforeExecuteChange: (Boolean) -> Unit,
     onGeminiApiKeyChange: (String) -> Unit,
     onSaveGeminiApiKey: () -> Unit,
     onOpenRouterApiKeyChange: (String) -> Unit,
@@ -74,6 +77,22 @@ fun SettingsDialog(
                     Text("سپردن تسک‌های جدید به ایجنت")
                     Switch(checked = agentHandledByDefault, onCheckedChange = onAgentHandledChange)
                 }
+
+                Spacer(Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("تأیید قبل از اجرا")
+                    Switch(checked = confirmBeforeExecute, onCheckedChange = onConfirmBeforeExecuteChange)
+                }
+                Text(
+                    text = "با خاموش‌کردن آن، فقط دستورهای حذف تأیید می‌گیرند — آن‌ها هیچ‌وقت بدون تأیید اجرا نمی‌شوند.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
 
                 Spacer(Modifier.height(16.dp))
 

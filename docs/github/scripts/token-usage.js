@@ -34,6 +34,9 @@ const repo = process.env.REPO; // "owner/name"
 const githubToken = process.env.GITHUB_TOKEN;
 const runUrl = process.env.RUN_URL || "";
 const reportFile = process.env.REPORT_FILE || "";
+// Set by the workflow's model ladder: which rung this report is for and how it ended. Empty for
+// a single-model run, where "rung 1 of 1" would be noise.
+const rungNote = process.env.RUNG_NOTE || "";
 const trailerFile = process.env.TRAILER_FILE || "";
 
 const num = (v) => (Number.isFinite(v) ? v : 0);
@@ -199,6 +202,7 @@ function buildReport(totals, calls, cost, models) {
         ? `### 💸 Token spend for #${issueNumber} — run failed`
         : `### 💸 Token spend for #${issueNumber}`;
   lines.push(headline, "");
+  if (rungNote) lines.push(`_${rungNote}_`, "");
 
   if (calls === 0) {
     lines.push(

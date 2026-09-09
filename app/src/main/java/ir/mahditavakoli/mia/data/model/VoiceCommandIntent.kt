@@ -8,7 +8,10 @@ enum class ActionType {
     @SerialName("create_project") CREATE_PROJECT,
     @SerialName("delete_project") DELETE_PROJECT,
     @SerialName("add_task") ADD_TASK,
-    @SerialName("remove_task") REMOVE_TASK
+    @SerialName("remove_task") REMOVE_TASK,
+    @SerialName("complete_task") COMPLETE_TASK,
+    @SerialName("reopen_task") REOPEN_TASK,
+    @SerialName("set_due_date") SET_DUE_DATE
 }
 
 /**

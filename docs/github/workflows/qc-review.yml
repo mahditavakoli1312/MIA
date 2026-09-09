@@ -1,0 +1,103 @@
+# Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/).
+#
+# QC, as a gate on TEC's pull requests rather than an advisor someone remembers to summon.
+#
+# It runs on every pull request TEC opens (branch `tec/issue-<n>`), reviews the diff against that
+# issue's acceptance criteria, and leaves its verdict as a label the TEC workflow is waiting for:
+#
+#   qc-approved  → TEC merges, exactly as it did before this workflow existed.
+#   needs-rework → TEC does not merge. The issue is re-queued with QC's blocking list appended to
+#                  the prompt, at most twice, then labelled `needs-human` and left alone.
+#   qc-skipped   → QC could not review (no key, quota, unusable answer). TEC merges anyway.
+#
+# The gate deliberately fails OPEN. A free model that is rate limited must not be able to block
+# every merge in a repository, so the only outcome that stops a merge is a model that actually
+# said "rework" — see .github/scripts/qc-review.js.
+name: QC Review (PR gate)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# One review per PR. A `synchronize` burst (two pushes in a row) would otherwise have two reviews
+# racing to set contradictory verdict labels; cancelling the older one is right, because the newer
+# push is what TEC's gate is waiting for a verdict on.
+concurrency:
+  group: qc-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  review:
+    # Only TEC's own pull requests. A human's PR is reviewed by humans, and the branch name is
+    # where the issue number comes from.
+    if: startsWith(github.event.pull_request.head.ref, 'tec/issue-')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+    steps:
+      # The verdict labels have to exist before anything can attach one.
+      - name: Ensure the verdict labels exist
+        run: |
+          create() {
+            gh label create "$1" --color "$2" --description "$3" --repo "$REPO" 2>/dev/null || true
+          }
+          create qc-approved 0e8a16 "QC approved this pull request"
+          create qc-skipped bfd4f2 "QC could not review — merging is not blocked"
+          create needs-rework d93f0b "QC asked for changes before this can be merged"
+          create needs-human b60205 "Two rework rounds were not enough — a human is needed"
+
+      # AGENTS.md and the acceptance criteria are the standard QC judges against, so the review
+      # needs the repo, not just the diff.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The diff goes to a FILE, never into an env var or a shell argument: it is agent-produced
+      # text of arbitrary length and content.
+      - name: Read the diff and the issue number
+        id: pr
+        run: |
+          gh pr diff "$PR_NUMBER" --repo "$REPO" > "${RUNNER_TEMP}/pr.diff" || true
+          # tec/issue-42 → 42. The branch name is the only link between a PR and its issue that
+          # survives a squash-merge and a deleted branch.
+          issue="${HEAD_REF##*/issue-}"
+          case "$issue" in
+            ''|*[!0-9]*) echo "::warning::Could not read an issue number out of '$HEAD_REF'." ;;
+            *) echo "issue=$issue" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Review the pull request
+        if: steps.pr.outputs.issue != ''
+        env:
+          # The same secrets and model every other role uses — see .github/scripts/ai-provider.js.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Raw model id — NO provider prefix: this script calls the provider's API directly.
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ steps.pr.outputs.issue }}
+          DIFF_FILE: ${{ runner.temp }}/pr.diff
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # An older bootstrap has the workflow but not the scripts. Say so on the PR and let the
+          # merge proceed — a missing reviewer is not a reason to block a change.
+          if [ ! -f .github/scripts/qc-review.js ]; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "✅ This repo has no \`.github/scripts/qc-review.js\`, so QC did not review this pull request. Merging is not blocked. Copy \`docs/github/scripts/\` (all of it — the script needs \`ai-provider.js\` too) into this repo to enable the gate."
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label qc-skipped || true
+            exit 0
+          fi
+          node .github/scripts/qc-review.js

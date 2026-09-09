@@ -136,6 +136,15 @@ data class GitHubLabel(
     val color: String = ""
 )
 
+/**
+ * PATCH /repos/{owner}/{repo}/issues/{number} — only the fields being changed are sent.
+ *
+ * [state] is "open" or "closed". GitHub also accepts a `state_reason`, but leaving it off lets
+ * GitHub pick its own default ("completed" when closing), which is what a task MIA closes means.
+ */
+@Serializable
+data class UpdateIssueBody(val state: String)
+
 /** GET/POST /repos/{owner}/{repo}/issues/{number}/comments */
 @Serializable
 data class GitHubIssueComment(
@@ -143,7 +152,39 @@ data class GitHubIssueComment(
     val body: String = "",
     val user: GitHubUser? = null,
     @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("html_url") val htmlUrl: String = "",
+    /**
+     * ".../issues/12" — present on the repo-wide comments endpoint, which is how a comment read
+     * without asking for a specific issue still knows which issue it belongs to. The per-issue
+     * endpoint returns it too; the caller there already knows the number and ignores it.
+     */
+    @SerialName("issue_url") val issueUrl: String? = null
+)
+
+/**
+ * One commit, as the spend screen reads them: GET /repos/{owner}/{repo}/commits.
+ *
+ * Only three things are needed — the message (which carries the `Token-Spend:` trailer the TEC
+ * workflow writes), when it landed, and a link — so the rest of GitHub's very large commit object
+ * is deliberately not modelled.
+ */
+@Serializable
+data class GitHubCommit(
+    val sha: String = "",
+    val commit: GitHubCommitDetail = GitHubCommitDetail(),
     @SerialName("html_url") val htmlUrl: String = ""
+)
+
+@Serializable
+data class GitHubCommitDetail(
+    val message: String = "",
+    val author: GitHubCommitAuthor? = null
+)
+
+@Serializable
+data class GitHubCommitAuthor(
+    /** ISO-8601, e.g. "2026-09-01T10:22:03Z". */
+    val date: String? = null
 )
 
 /** POST /repos/{owner}/{repo}/issues/{number}/comments */

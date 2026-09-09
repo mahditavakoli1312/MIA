@@ -130,6 +130,33 @@ class SecretStore(context: Context) {
             prefs.edit().putBoolean(KEY_AGENT_DEFAULT, value).apply()
         }
 
+    /**
+     * Whether an understood command is shown for approval before it is executed.
+     *
+     * Defaults to on: the model can mishear, and this is the last point at which a wrong
+     * delete_project costs nothing. Turning it off skips the sheet for ordinary commands only —
+     * destructive ones are confirmed regardless, so this preference cannot be used to arm a
+     * silent delete.
+     */
+    var confirmBeforeExecute: Boolean
+        get() = prefs.getBoolean(KEY_CONFIRM_BEFORE_EXECUTE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CONFIRM_BEFORE_EXECUTE, value).apply()
+        }
+
+    /**
+     * A monthly ceiling on tokens, in tokens rather than dollars, and 0 for "no budget".
+     *
+     * Tokens because that is the number that actually exists for every actor here: the free
+     * OpenRouter models bill $0.00 and Gemini's own quota is not reported per call, so a dollar
+     * budget would sit at zero while the daily request cap was being hit. Tokens are what run out.
+     */
+    var monthlyTokenBudget: Int
+        get() = prefs.getInt(KEY_MONTHLY_TOKEN_BUDGET, 0)
+        set(value) {
+            prefs.edit().putInt(KEY_MONTHLY_TOKEN_BUDGET, value.coerceAtLeast(0)).apply()
+        }
+
     private companion object {
         const val TAG = "MIA_SecretStore"
         const val PREFS_NAME = "mia_secrets"
@@ -139,6 +166,8 @@ class SecretStore(context: Context) {
         const val KEY_MINIMAX = "minimax_api_key"
         const val KEY_TEXT_MODEL = "text_model_id"
         const val KEY_AGENT_DEFAULT = "agent_handled_by_default"
+        const val KEY_CONFIRM_BEFORE_EXECUTE = "confirm_before_execute"
+        const val KEY_MONTHLY_TOKEN_BUDGET = "monthly_token_budget"
 
         /**
          * Opens the store, resetting it once if it can't be decrypted.

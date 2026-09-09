@@ -32,6 +32,48 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The design-system rule, enforced rather than documented. A screen that writes its own
+      # colours and spacing is how a generated app ends up looking like four people built it, and
+      # it is the single most common thing a small model does when nobody checks.
+      #
+      # Only *Screen.kt is checked, and the design module itself is exempt: raw values are exactly
+      # what a token file is for.
+      - name: Lint screens for raw colours and sizes
+        run: |
+          screens="$(git ls-files '*Screen.kt' | grep -v '/mia/design/' || true)"
+          if [ -z "$screens" ]; then
+            echo "No screens yet — nothing to check."
+            exit 0
+          fi
+
+          # `[^A-Za-z0-9_.]` before the digits so `Spacing.md` and `Sizes.iconSm` don't match, and
+          # a bare `16.dp` does.
+          colors="$(grep -nE 'Color\(0x|Color\.(Red|Green|Blue|Yellow|Cyan|Magenta|White|Black|Gray|LightGray|DarkGray)' $screens || true)"
+          sizes="$(grep -nE '(^|[^A-Za-z0-9_.])[0-9]+(\.[0-9]+)?\.(dp|sp)' $screens || true)"
+
+          if [ -z "$colors" ] && [ -z "$sizes" ]; then
+            echo "All screens use the design system."
+            exit 0
+          fi
+          {
+            echo "::error::A screen is writing raw colours or sizes instead of using the design system."
+            echo
+            echo "Use MaterialTheme.colorScheme.* for colour and the tokens in"
+            echo "app/src/main/java/mia/design/Tokens.kt (Spacing, Radius, Sizes, Elevation, Motion)"
+            echo "for every number. Build screens from the components in MiaComponents.kt."
+            echo
+            if [ -n "$colors" ]; then
+              echo "Raw colours:"
+              printf '%s\n' "$colors"
+              echo
+            fi
+            if [ -n "$sizes" ]; then
+              echo "Raw sizes:"
+              printf '%s\n' "$sizes"
+            fi
+          } >&2
+          exit 1
+
       - name: Assemble (debug)
         run: |
           if [ -f ./gradlew ]; then

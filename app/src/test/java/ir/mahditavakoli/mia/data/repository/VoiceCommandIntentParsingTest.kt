@@ -45,4 +45,31 @@ class VoiceCommandIntentParsingTest {
         assertEquals("ورود با گوگل", intents[2].taskTitle)
         assertNull(intents[2].dueDate)
     }
+
+    /**
+     * The task-state actions the prompt was extended with. They are the actions that can close
+     * the loop on a task, so a wire name that drifts from [ActionType]'s @SerialName would leave
+     * every "ببندش" command failing to parse — with no compiler error to catch it.
+     */
+    @Test
+    fun `the task-state actions decode from their snake_case wire names`() {
+        val raw = """
+            [
+              {"action_type":"complete_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null},
+              {"action_type":"reopen_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null},
+              {"action_type":"set_due_date","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":"2026-03-06"}
+            ]
+        """.trimIndent()
+
+        val intents = parseIntents(raw)
+
+        assertEquals(
+            listOf(ActionType.COMPLETE_TASK, ActionType.REOPEN_TASK, ActionType.SET_DUE_DATE),
+            intents.map { it.actionType }
+        )
+        // All three name a task; none of them carries a brief — that is add_task's alone.
+        assertTrue(intents.all { it.taskTitle == "طراحی لوگو" })
+        assertTrue(intents.all { it.taskDescription == null })
+        assertEquals("2026-03-06", intents[2].dueDate)
+    }
 }

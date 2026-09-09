@@ -50,7 +50,8 @@ Output: a JSON ARRAY of one or more intent objects. Even for a single simple com
 exactly one object. Each object has exactly these five keys, no extra keys, no nesting:
 [
   {
-    "action_type": "create_project" | "delete_project" | "add_task" | "remove_task",
+    "action_type": "create_project" | "delete_project" | "add_task" | "remove_task"
+                 | "complete_task" | "reopen_task" | "set_due_date",
     "project_name": string,
     "task_title": string or null,
     "task_description": string or null,
@@ -59,11 +60,11 @@ exactly one object. Each object has exactly these five keys, no extra keys, no n
 ]
 
 Rules:
-1. action_type must be exactly one of the four allowed values above — never any other word.
+1. action_type must be exactly one of the seven allowed values above — never any other word.
 2. project_name is required for every object and must never be null. If the user does not name a project
    explicitly but clearly means a general/default list, use "عمومی".
-3. task_title must be a non-null, short string (a few words) for add_task and remove_task, and must be null
-   for create_project and delete_project.
+3. task_title must be a non-null, short string (a few words) for add_task, remove_task, complete_task,
+   reopen_task and set_due_date, and must be null for create_project and delete_project.
 4. task_description must be null for every action EXCEPT add_task. For add_task it must be a comprehensive,
    self-contained brief in Persian, formatted as Markdown, that an autonomous coding agent can implement from
    without further questions. Include ONLY the sections that genuinely apply to the task, keeping these exact
@@ -78,13 +79,15 @@ Rules:
      and interaction/accessibility notes. Omit this whole section for tasks with no user-facing surface.
    Expand the request into real detail, but never invent scope or hard requirements the user did not imply.
 5. due_date must be null unless the user stated or implied a deadline; when present, normalize it to
-   "YYYY-MM-DD" using today's date above. Never return a relative string like "فردا" in due_date.
+   "YYYY-MM-DD" using today's date above. Never return a relative string like "فردا" in due_date. For
+   set_due_date the deadline IS the point of the command, so due_date must never be null there — if the user
+   asks to clear a deadline rather than move it, that is not set_due_date and must not be emitted at all.
 6. Keep project_name, task_title, and all task_description prose in Persian, trimmed of filler words
    ("لطفاً", "میشه", "یه"), without surrounding quotes.
-7. For delete_project, add_task, and remove_task the user refers to something that already exists: match the
-   named project (and task) to the closest existing one from the list above and return its EXACT stored
-   spelling, even if the input differs (different letters, spacing, or نیم‌فاصله). Do not invent a new project
-   name for these actions when a clearly-corresponding existing one is present.
+7. For every action except create_project the user refers to something that already exists: match the named
+   project (and task) to the closest existing one from the list above and return its EXACT stored spelling,
+   even if the input differs (different letters, spacing, or نیم‌فاصله). Do not invent a new project name for
+   these actions when a clearly-corresponding existing one is present.
 8. Use create_project only when the user intends to create a new project. If a project with essentially the same
    name already exists, prefer interpreting the command as an action on that existing project.
 9. Break complex requests down. If the command describes several distinct pieces of work (multiple features,
@@ -94,6 +97,10 @@ Rules:
    emit the create_project object FIRST, then the add_task objects, all referencing the same project_name.
 10. Always return a JSON array (never a bare object, never fences), ordered so that any prerequisite
     (e.g. create_project) comes before objects that depend on it.
+11. Distinguish finishing a task from deleting one. "تمام شد", "انجام شد", "ببند", "تیک بزن" mean complete_task
+    (the task stays, it is just marked done); only "حذف کن" / "پاک کن" mean remove_task. "باز کن دوباره",
+    "هنوز تموم نشده", "برگردون" mean reopen_task. Moving or setting a deadline on a task that already exists is
+    set_due_date, never a second add_task.
 
 Examples (assuming today is $todayIso):
 
@@ -111,6 +118,15 @@ $exampleLabel: "برای اپ فروشگاه صفحه ورود با ایمیل �
 
 $exampleLabel: "تسک طراحی لوگو رو از پروژه وبسایت پاک کن"
 [{"action_type":"remove_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null}]
+
+$exampleLabel: "تسک طراحی لوگو رو ببند"
+[{"action_type":"complete_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null}]
+
+$exampleLabel: "تسک طراحی لوگو هنوز تموم نشده، دوباره بازش کن"
+[{"action_type":"reopen_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null}]
+
+$exampleLabel: "مهلت تسک طراحی لوگو رو بذار جمعه آینده"
+[{"action_type":"set_due_date","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":"$nextFridayIso"}]
         """.trimIndent()
     }
 

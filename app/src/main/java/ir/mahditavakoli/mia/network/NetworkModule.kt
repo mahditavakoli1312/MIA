@@ -53,18 +53,37 @@ object NetworkModule {
 
     /**
      * The bundled files uploaded to every new repo, mapping each asset to its repo-relative
-     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the token-spend
-     * reporter, the add-to-project and CI workflows, and the Pages publisher that puts a web
-     * product's live URL on the repo. Together they stand up the whole free-model AI team.
+     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the PO brief
+     * decomposer, the QC pull-request gate, the shared provider/key module every role script
+     * calls, the token-spend
+     * reporter, the add-to-project and CI workflows, the Pages publisher that puts a web
+     * product's live URL on the repo, and AGENTS.md — the conventions file every agent prompt
+     * injects, which is why it is the one asset that lands at the repo root rather than under
+     * .github/. Together they stand up the whole free-model AI team.
+     *
+     * The four `design-*.kt` assets are the odd ones out: they are not part of the team at all but
+     * the design system the team is expected to build UI from, and they land in the app's own
+     * source tree under a fixed `mia.design` package — fixed because MIA cannot know what package
+     * a repo it just created will end up using.
      */
     private val BOOTSTRAP_ASSETS = listOf(
+        "AGENTS.md" to "AGENTS.md",
         "agent-issue-worker.yml" to ".github/workflows/agent-issue-worker.yml",
         "ai-role-review.yml" to ".github/workflows/ai-role-review.yml",
+        "decompose-brief.yml" to ".github/workflows/decompose-brief.yml",
+        "qc-review.yml" to ".github/workflows/qc-review.yml",
         "add-to-project.yml" to ".github/workflows/add-to-project.yml",
         "ci.yml" to ".github/workflows/ci.yml",
         "preview-web.yml" to ".github/workflows/preview-web.yml",
+        "ai-provider.js" to ".github/scripts/ai-provider.js",
         "ai-role-review.js" to ".github/scripts/ai-role-review.js",
-        "token-usage.js" to ".github/scripts/token-usage.js"
+        "decompose-brief.js" to ".github/scripts/decompose-brief.js",
+        "qc-review.js" to ".github/scripts/qc-review.js",
+        "token-usage.js" to ".github/scripts/token-usage.js",
+        "design-tokens.kt" to "app/src/main/java/mia/design/Tokens.kt",
+        "design-theme.kt" to "app/src/main/java/mia/design/MiaTheme.kt",
+        "design-components.kt" to "app/src/main/java/mia/design/MiaComponents.kt",
+        "design-example.kt" to "app/src/main/java/mia/design/ExampleScreen.kt"
     )
 
     /** Reads each bundled asset and pairs it with the path it should live at in a new repo. */

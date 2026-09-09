@@ -1,6 +1,7 @@
 package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.IssueComment
+import ir.mahditavakoli.mia.data.model.IssueLabels
 import ir.mahditavakoli.mia.data.model.IssueList
 import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.data.model.TokenUsage
@@ -9,8 +10,10 @@ import ir.mahditavakoli.mia.network.github.CreateIssueBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
 import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
+import ir.mahditavakoli.mia.network.github.UpdateIssueBody
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 import ir.mahditavakoli.mia.network.openrouter.providerFor
+import ir.mahditavakoli.mia.text.PersianText
 import kotlin.math.absoluteValue
 
 /**
@@ -127,6 +130,44 @@ class GitHubRepository(
     }
 
     /**
+     * Files one long-form intent as a single issue labelled [BRIEF_LABEL].
+     *
+     * Deliberately NOT labelled [AGENT_LABEL]: a brief is a week of work described in a
+     * paragraph, and handing it straight to TEC — a small model that reads one issue and edits
+     * files — produces either nothing or a mess. The `brief` label triggers the PO decomposition
+     * workflow instead, which turns it into several TEC-sized issues and queues the ones that can
+     * start now.
+     *
+     * The body is the user's own words, with the success criterion appended under its own heading
+     * when they gave one — the PO reads prose, so nothing is templated on the way out.
+     */
+    suspend fun createBrief(
+        projectName: String,
+        title: String,
+        description: String,
+        successCriteria: String? = null
+    ): Result<RepoIssue> = runCatching {
+        require(title.isNotBlank()) { "عنوان نیت خالی است" }
+        require(description.isNotBlank()) { "شرح نیت خالی است" }
+        val body = buildString {
+            append(description.trim())
+            successCriteria?.trim()?.takeIf { it.isNotEmpty() }?.let { criteria ->
+                append("\n\n## معیار موفقیت\n")
+                append(criteria)
+            }
+        }
+        api.createIssue(
+            owner = owner(),
+            repo = repoNameFor(projectName),
+            body = CreateIssueBody(
+                title = title.trim(),
+                body = body,
+                labels = listOf(BRIEF_LABEL)
+            )
+        ).toRepoIssue()
+    }
+
+    /**
      * The label names this project's repo defines, for the "new issue" sheet to offer.
      *
      * [AGENT_LABEL] is guaranteed to be in the result even if the repo somehow lacks it: it is
@@ -175,6 +216,68 @@ class GitHubRepository(
             if (page == ISSUE_PAGE_LIMIT) truncated = true
         }
         IssueList(issues = collected, isTruncated = truncated)
+    }
+
+    /**
+     * Issues of this project's repo touched since [since] (ISO-8601 UTC) — the read the
+     * background watcher does, and the only one in this class that is not about what is on
+     * screen right now.
+     *
+     * Narrowed by `since` rather than filtered client-side because the watcher runs on a timer
+     * against every project the user has: pulling three full pages per repo every fifteen
+     * minutes would spend the rate limit that the screens actually need.
+     */
+    suspend fun issuesUpdatedSince(projectName: String, since: String): Result<List<RepoIssue>> =
+        runCatching {
+            val owner = owner()
+            val repo = repoNameFor(projectName)
+            val collected = mutableListOf<RepoIssue>()
+            for (page in 1..ISSUE_PAGE_LIMIT) {
+                val batch = api.listIssuesUpdatedSince(
+                    owner = owner,
+                    repo = repo,
+                    state = "all",
+                    since = since,
+                    perPage = ISSUE_PAGE_SIZE,
+                    page = page
+                )
+                collected += batch.filter { it.pullRequest == null }.map { it.toRepoIssue() }
+                if (batch.size < ISSUE_PAGE_SIZE) break
+            }
+            collected
+        }
+
+    /**
+     * Mirrors a task's done/undone state onto the issue that task opened: [open] = false closes
+     * it, true reopens it.
+     *
+     * The issue is found by title, because that is all a closing command carries — the model is
+     * given project and task names, never issue numbers. Titles are compared on
+     * [PersianText.fold]ed forms, the same key the project lookup uses, so a spoken title that
+     * differs by ی/ک variants or نیم‌فاصله still finds its issue.
+     *
+     * Returns null when the project's repo has no issue by that title — a task added before the
+     * GitHub token was configured has none, and that is not an error. An issue already in the
+     * requested state is returned untouched rather than PATCHed for nothing.
+     */
+    suspend fun setIssueStateForTask(
+        projectName: String,
+        taskTitle: String,
+        open: Boolean
+    ): Result<RepoIssue?> = runCatching {
+        val target = PersianText.fold(taskTitle)
+        val issue = issuesFor(projectName).getOrThrow().issues
+            .firstOrNull { PersianText.fold(it.title) == target }
+            ?: return@runCatching null
+        if (issue.isOpen == open) return@runCatching issue
+        val response = api.updateIssue(
+            owner = owner(),
+            repo = repoNameFor(projectName),
+            number = issue.number,
+            body = UpdateIssueBody(state = if (open) "open" else "closed")
+        )
+        check(response.isSuccessful) { "HTTP ${response.code()}" }
+        issue.copy(isOpen = open)
     }
 
     /** One issue, re-read from GitHub so the detail screen shows its current state and body. */
@@ -310,6 +413,14 @@ class GitHubRepository(
         )
     }
 
+    /**
+     * The authenticated user's login, for callers that build their own requests — the spend screen
+     * reads commits and repo-wide comments, which are not issue operations and don't belong here.
+     * Shared so those reads use the same cached lookup rather than spending a `GET /user` of their
+     * own on the rate limit this class is careful about.
+     */
+    suspend fun ownerLogin(): String = owner()
+
     private suspend fun owner(): String =
         cachedOwner ?: api.getAuthenticatedUser().login.also { cachedOwner = it }
 
@@ -322,7 +433,15 @@ class GitHubRepository(
     )
 
     companion object {
-        const val AGENT_LABEL = "by-agent"
+        // Aliases of the one definition in IssueLabels, kept because these names are read all
+        // over the app and the model layer is where the pipeline's vocabulary belongs.
+        const val AGENT_LABEL = IssueLabels.AGENT
+
+        /** The label the agent workflow attaches once an issue's work is merged. */
+        const val DONE_LABEL = IssueLabels.DONE
+
+        /** A long-form intent for the PO agent to decompose — see [createBrief]. */
+        const val BRIEF_LABEL = IssueLabels.BRIEF
 
         /** GitHub's maximum page size for list endpoints. */
         private const val ISSUE_PAGE_SIZE = 100

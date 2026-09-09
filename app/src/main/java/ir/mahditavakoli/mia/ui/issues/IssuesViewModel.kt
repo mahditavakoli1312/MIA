@@ -16,8 +16,14 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-/** Which half of a project's issues the list is showing. */
-enum class IssueFilter { OPEN, CLOSED }
+/**
+ * Which slice of a project's issues the list is showing.
+ *
+ * [BRIEFS] is a third tab rather than rows mixed into [OPEN] because a brief is not a piece of
+ * work — it is an intent that will *become* several issues, and it stops being interesting the
+ * moment the PO has decomposed it.
+ */
+enum class IssueFilter { OPEN, CLOSED, BRIEFS }
 
 /**
  * The "open a new issue" sheet, non-null while it is showing.
@@ -57,10 +63,18 @@ data class IssuesUiState(
     val redoing: Set<Int> = emptySet()
 ) {
     /** The issues the selected tab shows, newest first (GitHub's own list order). */
-    val visible: List<RepoIssue> get() = all.withState(open = filter == IssueFilter.OPEN)
+    val visible: List<RepoIssue>
+        get() = when (filter) {
+            IssueFilter.OPEN -> all.ordinary.filter { it.isOpen }
+            IssueFilter.CLOSED -> all.ordinary.filterNot { it.isOpen }
+            IssueFilter.BRIEFS -> all.briefs
+        }
 
+    // Briefs are excluded from these two (see IssueList.counts), so the tab labels and the rows
+    // behind them always agree.
     val openCount: Int get() = all.counts.open
     val closedCount: Int get() = all.counts.closed
+    val briefCount: Int get() = all.briefs.size
 }
 
 /**
@@ -198,8 +212,9 @@ class IssuesViewModel(application: Application) : AndroidViewModel(application) 
                         it.copy(
                             newIssue = null,
                             all = it.all.copy(issues = listOf(issue) + it.all.issues),
-                            // A new issue is open, so show the tab it landed in.
-                            filter = IssueFilter.OPEN
+                            // Show the tab it landed in — a `brief` label picked by hand puts it
+                            // with the briefs, not with the ordinary open issues.
+                            filter = if (issue.isBrief) IssueFilter.BRIEFS else IssueFilter.OPEN
                         )
                     }
                     _events.trySend(

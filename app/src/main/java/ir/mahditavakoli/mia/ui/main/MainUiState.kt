@@ -1,7 +1,10 @@
 package ir.mahditavakoli.mia.ui.main
 
+import ir.mahditavakoli.mia.data.model.ActionType
 import ir.mahditavakoli.mia.data.model.IssueCounts
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.data.model.TokenUsage
+import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 
 sealed interface RecordingState {
@@ -11,21 +14,58 @@ sealed interface RecordingState {
 }
 
 /**
- * Which stage of a command is running, so the status banner can say something truthful instead
- * of a single opaque "processing" for what is really three different waits.
+ * One row of the confirmation sheet: an intent the model produced, plus the two things the sheet
+ * tracks about it that the intent itself has no room for.
+ *
+ * [id] is a stable identity for the row across edits — the intent inside it is replaced wholesale
+ * on every keystroke, so a list key derived from its contents would make Compose tear down and
+ * rebuild the text field the user is typing in.
  */
-enum class CommandStage {
-    /** Nothing in flight. */
-    NONE,
+data class ConfirmableIntent(
+    val id: Int,
+    val intent: VoiceCommandIntent,
+    /**
+     * Whether the user has separately ticked this destructive row. Meaningless (and ignored) for
+     * everything else — see [IntentConfirmation.canExecute].
+     */
+    val isAcknowledged: Boolean = false
+) {
+    /**
+     * Actions that destroy data a model may simply have misheard. A wrongly-understood add_task
+     * costs one stray issue; a wrongly-understood delete_project takes the project and, by the
+     * schema's cascade, every task under it.
+     */
+    val isDestructive: Boolean
+        get() = intent.actionType == ActionType.DELETE_PROJECT ||
+            intent.actionType == ActionType.REMOVE_TASK
+}
 
-    /** Typed text is being rewritten into an explicit prompt (OpenRouter pre-processing). */
-    REFINING,
+/**
+ * The "here is what I understood — shall I?" sheet, held in the ViewModel rather than the
+ * composable so an edited-but-not-yet-run batch survives rotation.
+ *
+ * It stands between classification and [ir.mahditavakoli.mia.data.repository.IntentExecutionRepository],
+ * which is the only point where a misheard command is still cheap to fix.
+ */
+data class IntentConfirmation(
+    val rows: List<ConfirmableIntent>,
+    /**
+     * The command exactly as the user gave it, put back in the field when they choose to reword
+     * instead of run. Null for a spoken command — there is no text to give back.
+     */
+    val originalText: String?,
+    /** Carried through untouched so the executed batch still reports what understanding it cost. */
+    val usage: TokenUsage? = null,
+    /** Frozen at classification time, so toggling the Settings switch mid-sheet can't change it. */
+    val agentHandled: Boolean = true,
+    /** True from the moment the user confirms until execution lands. */
+    val isExecuting: Boolean = false
+) {
+    /** Every destructive row must be ticked on its own before the whole batch can run. */
+    val canExecute: Boolean
+        get() = !isExecuting && rows.isNotEmpty() && rows.all { !it.isDestructive || it.isAcknowledged }
 
-    /** The prompt (or the recorded audio) is being turned into intent JSON. */
-    UNDERSTANDING,
-
-    /** Intents are being executed against Supabase/GitHub. */
-    EXECUTING
+    val intents: List<VoiceCommandIntent> get() = rows.map { it.intent }
 }
 
 /**
@@ -70,12 +110,25 @@ data class MainUiState(
     val commandText: String = "",
     val stage: CommandStage = CommandStage.NONE,
     /**
+     * The live timeline of the command in flight, or the last one to finish.
+     *
+     * Non-null well past [stage] returning to NONE: the app's part of a command ends in seconds
+     * and the agent's part takes minutes, and this is what keeps the second half visible instead
+     * of ending the story at "sent".
+     */
+    val timeline: CommandTimeline? = null,
+    /**
      * The cleaned-up prompt the last typed command was actually understood from, shown back to
      * the user so the pre-processing step is visible rather than a black box.
      */
     val refinedPrompt: String? = null,
     /** New voice-created tasks are handed to the CI agent (labeled "by-agent"). */
     val agentHandledByDefault: Boolean = true,
+    /**
+     * Whether every understood command is shown for approval before it runs. When off, only
+     * destructive batches are — those are never skipped, whatever this says.
+     */
+    val confirmBeforeExecute: Boolean = true,
     /** What the user last saved as the Gemini API key (empty if none / using build default). */
     val geminiApiKey: String = "",
     /** What the user last saved as the OpenRouter API key (empty if none). */
@@ -90,6 +143,8 @@ data class MainUiState(
     val isGitHubConfigured: Boolean = false,
     /** Non-null while the model picker is open for one project. */
     val agentModelDialog: AgentModelDialogState? = null,
+    /** Non-null while a classified command is waiting for the user's approval. */
+    val pendingConfirmation: IntentConfirmation? = null,
     /** Issue counts per project name; missing means "not requested yet". */
     val issueSummaries: Map<String, ProjectIssueSummary> = emptyMap()
 ) {
