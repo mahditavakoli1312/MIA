@@ -99,6 +99,24 @@ data class PutSecretBody(
 )
 
 /**
+ * GET/PUT /repos/{owner}/{repo}/actions/permissions/workflow — the "Workflow permissions"
+ * block of a repo's Actions settings.
+ *
+ * MIA only cares about [canApprovePullRequestReviews], the "Allow GitHub Actions to create and
+ * approve pull requests" switch: with it off, `gh pr create` under `GITHUB_TOKEN` is refused
+ * outright, so TEC commits a branch and then cannot open the pull request it just prepared.
+ * [defaultWorkflowPermissions] is read only so it can be written back untouched — see
+ * [ir.mahditavakoli.mia.data.repository.RepoBootstrapper.allowActionsToOpenPullRequests].
+ */
+@Serializable
+data class WorkflowPermissions(
+    /** "read" or "write" — the token scope a workflow gets when it declares none itself. */
+    @SerialName("default_workflow_permissions") val defaultWorkflowPermissions: String? = null,
+    @SerialName("can_approve_pull_request_reviews")
+    val canApprovePullRequestReviews: Boolean = false
+)
+
+/**
  * One issue as the list/detail endpoints return it.
  *
  * The list endpoint (`GET /repos/{owner}/{repo}/issues`) also returns pull requests — GitHub

@@ -18,6 +18,7 @@ import ir.mahditavakoli.mia.network.github.PutContentBody
 import ir.mahditavakoli.mia.network.github.PutSecretBody
 import ir.mahditavakoli.mia.network.github.RepoPublicKey
 import ir.mahditavakoli.mia.network.github.UpdateIssueBody
+import ir.mahditavakoli.mia.network.github.WorkflowPermissions
 import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.Response
 
@@ -279,6 +280,21 @@ class FakeGitHubApi : GitHubApi {
         return labelResponse(body)
     }
 
+    /** Every workflow-permissions block written, in order. */
+    val putWorkflowPermissions = mutableListOf<WorkflowPermissions>()
+
+    /** What the repo's Actions settings currently say. Tests override it to start "off". */
+    var workflowPermissionsResponse: () -> Response<WorkflowPermissions> = {
+        Response.success(
+            WorkflowPermissions(
+                defaultWorkflowPermissions = "read",
+                canApprovePullRequestReviews = false
+            )
+        )
+    }
+
+    var putWorkflowPermissionsResponse: () -> Response<Unit> = { Response.success(Unit) }
+
     override suspend fun getRepoPublicKey(owner: String, repo: String): RepoPublicKey = publicKey
 
     override suspend fun putActionsSecret(
@@ -291,6 +307,20 @@ class FakeGitHubApi : GitHubApi {
         putSecretBody = body
         putSecrets += name to body
         return putSecretResponse(name)
+    }
+
+    override suspend fun getWorkflowPermissions(
+        owner: String,
+        repo: String
+    ): Response<WorkflowPermissions> = workflowPermissionsResponse()
+
+    override suspend fun putWorkflowPermissions(
+        owner: String,
+        repo: String,
+        body: WorkflowPermissions
+    ): Response<Unit> {
+        putWorkflowPermissions += body
+        return putWorkflowPermissionsResponse()
     }
 
     companion object {

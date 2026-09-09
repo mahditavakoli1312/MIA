@@ -6,6 +6,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import ir.mahditavakoli.mia.network.github.WorkflowPermissions
 import retrofit2.Response
 import java.util.Base64
 
@@ -171,4 +172,120 @@ class RepoBootstrapperTest {
         assertEquals(RepoBootstrapper.LABELS.size, api.createdLabels.size)
         assertNotNull(api.putSecretBody)
     }
+
+    // --- letting Actions open pull requests -------------------------------------------------
+    //
+    // TEC's whole output is a pull request, and the repository setting below is a hard gate on
+    // `gh pr create` under GITHUB_TOKEN — not something the workflow's own `permissions:` block
+    // can grant. A repo created without it does all the work and then cannot deliver it.
+
+    @Test
+    fun `a new repo is allowed to open pull requests`() = runBlocking {
+        val api = FakeGitHubApi()
+
+        val result = bootstrapper(api).bootstrap(
+            owner = "octocat",
+            name = "test-repo",
+            description = null,
+            private = true,
+            agentApiKey = "agent-secret"
+        )
+
+        assertTrue("no warnings expected: ${result.warnings}", result.warnings.isEmpty())
+        assertEquals(true, api.putWorkflowPermissions.single().canApprovePullRequestReviews)
+    }
+
+    @Test
+    fun `the default token scope is written back exactly as it was found`() = runBlocking {
+        // Every workflow MIA installs declares its own `permissions:`, so this field never
+        // applies to them — widening a repo the user deliberately set to read-only would be a
+        // change nobody asked for, made as a side effect of creating a project.
+        val api = FakeGitHubApi().apply {
+            workflowPermissionsResponse = {
+                Response.success(
+                    WorkflowPermissions(
+                        defaultWorkflowPermissions = "read",
+                        canApprovePullRequestReviews = false
+                    )
+                )
+            }
+        }
+
+        bootstrapper(api).bootstrap(
+            owner = "octocat",
+            name = "test-repo",
+            description = null,
+            private = true,
+            agentApiKey = "agent-secret"
+        )
+
+        assertEquals("read", api.putWorkflowPermissions.single().defaultWorkflowPermissions)
+    }
+
+    @Test
+    fun `a repo that already allows it is not written to again`() = runBlocking {
+        val api = FakeGitHubApi().apply {
+            workflowPermissionsResponse = {
+                Response.success(
+                    WorkflowPermissions(
+                        defaultWorkflowPermissions = "write",
+                        canApprovePullRequestReviews = true
+                    )
+                )
+            }
+        }
+
+        val result = bootstrapper(api).bootstrap(
+            owner = "octocat",
+            name = "test-repo",
+            description = null,
+            private = true,
+            agentApiKey = "agent-secret"
+        )
+
+        assertTrue(api.putWorkflowPermissions.isEmpty())
+        assertTrue(result.warnings.isEmpty())
+    }
+
+    @Test
+    fun `an org that forbids the setting is a warning, not a failed repo`() = runBlocking {
+        // Organizations can lock this down, and a fine-grained token may lack the scope. The
+        // repo is otherwise fully wired up, so it is handed back with the shortfall named.
+        val api = FakeGitHubApi().apply {
+            putWorkflowPermissionsResponse = { FakeGitHubApi.error(403) }
+        }
+
+        val result = bootstrapper(api).bootstrap(
+            owner = "octocat",
+            name = "test-repo",
+            description = null,
+            private = true,
+            agentApiKey = "agent-secret"
+        )
+
+        assertNotNull(api.createRepoBody)
+        assertEquals(1, result.warnings.size)
+        assertTrue(result.warnings.single().contains("403"))
+        assertTrue(result.warnings.single().contains("pull request"))
+    }
+
+    @Test
+    fun `a template-cloned repo gets the setting too`() = runBlocking {
+        // The template route skips the file uploads, but a generated repo carries GitHub's own
+        // default for this switch just like a plain one does.
+        val api = FakeGitHubApi()
+
+        bootstrapper(api, template = "octocat/mia-template").bootstrap(
+            owner = "octocat",
+            name = "test-repo",
+            description = null,
+            private = true,
+            agentApiKey = "agent-secret"
+        )
+
+        assertNotNull(api.generateBody)
+        assertTrue(api.putContents.isEmpty())
+        assertEquals(true, api.putWorkflowPermissions.single().canApprovePullRequestReviews)
+    }
+
 }

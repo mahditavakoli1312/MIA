@@ -202,4 +202,23 @@ interface GitHubApi {
         @Path("name") name: String,
         @Body body: PutSecretBody
     ): Response<Unit>
+
+    @GET("repos/{owner}/{repo}/actions/permissions/workflow")
+    suspend fun getWorkflowPermissions(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String
+    ): Response<WorkflowPermissions>
+
+    /**
+     * Both fields are optional to GitHub, but this sends them together on purpose: MIA reads the
+     * current block first and writes back the `default_workflow_permissions` it found, so
+     * turning the pull-request switch on can never quietly change the other half of a setting
+     * page the user may have deliberately tightened.
+     */
+    @PUT("repos/{owner}/{repo}/actions/permissions/workflow")
+    suspend fun putWorkflowPermissions(
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Body body: WorkflowPermissions
+    ): Response<Unit>
 }
