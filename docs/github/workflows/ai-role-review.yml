@@ -42,13 +42,18 @@ jobs:
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           # Read only when AGENT_PROVIDER is "minimax".
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-          # Same model as TEC; override with an AGENT_MODEL repo variable.
-          # (Raw model id — NO provider prefix here: unlike the TEC workflow, this script
+          # A model PER ROLE. @po and @qc answer the same comment from different seats, so
+          # each reads its own AGENT_MODEL_<ROLE>, falls back to the repo-wide AGENT_MODEL,
+          # and finally to the literal default below — which is what the MIA app's model
+          # management screen rewrites when you point one role somewhere else.
+          # (Raw model ids — NO provider prefix here: unlike the TEC workflow, this script
           # calls the provider's API directly and sends the value verbatim.)
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
-          # Which service that id belongs to, and therefore which key above to spend and which
-          # host to call. Must always be changed together with AGENT_MODEL.
-          AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+          AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          # Which service each id belongs to, and therefore which key above to spend and which
+          # host to call. A role's provider must always be changed together with its model.
+          AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
+          AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

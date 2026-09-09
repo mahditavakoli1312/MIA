@@ -56,7 +56,7 @@ class RepoBootstrapper(
     private val api: GitHubApi,
     private val base64: Base64Encoder,
     private val encryptor: SecretEncryptor,
-    private val files: List<BootstrapFile>,
+    private val files: () -> List<BootstrapFile>,
     private val templateRepo: String = MIA_TEMPLATE_REPO
 ) {
 
@@ -98,7 +98,10 @@ class RepoBootstrapper(
 
         // 1. Team files — only when we didn't clone a template that already carries them.
         if (!useTemplate) {
-            for (file in files) {
+            // Read per bootstrap, not once at construction: the files carry the per-role model
+            // defaults the user has chosen, and those can change between two projects being
+            // created without the app being restarted.
+            for (file in files()) {
                 runCatching {
                     val response = api.putContent(
                         owner = owner,

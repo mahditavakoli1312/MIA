@@ -49,7 +49,10 @@ const REWORK_MARKER = "<!-- qc-rework -->";
 const MAX_ROUNDS = 2;
 const DIFF_LIMIT = 40000;
 
-const ai = resolveProvider(process.env);
+// QC's own model: AGENT_MODEL_QC when the repo sets one, the repo-wide AGENT_MODEL
+// otherwise. Reviewing a diff is the job most worth spending a bigger model on, which is
+// exactly why it can be pointed somewhere else than the agent that wrote the diff.
+const ai = resolveProvider(process.env, "qc");
 
 /** Records the outcome for an inline caller. Labels stay the record for everyone else. */
 function reportVerdict(verdict) {

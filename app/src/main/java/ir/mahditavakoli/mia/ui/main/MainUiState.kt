@@ -68,21 +68,6 @@ data class IntentConfirmation(
     val intents: List<VoiceCommandIntent> get() = rows.map { it.intent }
 }
 
-/**
- * The "which model does this project's AI team run on" sheet, open for exactly one project.
- *
- * [currentModel] is read from the repo when the sheet opens rather than remembered: the
- * workflow files on GitHub are the source of truth and can change without MIA's involvement.
- * Null once loading finishes means the repo names no model at all — an older bootstrap.
- */
-data class AgentModelDialogState(
-    val projectName: String,
-    val repoName: String,
-    val currentModel: String? = null,
-    val isLoadingCurrent: Boolean = true,
-    /** True from the moment a model is picked until GitHub has been written. */
-    val isApplying: Boolean = false
-)
 
 /**
  * The open/closed issue counts shown on one project card.
@@ -139,10 +124,8 @@ data class MainUiState(
     val miniMaxApiKey: String = "",
     /** Which model the app's own typed commands run on — a device preference, not a repo one. */
     val textModelId: String = DEFAULT_TEXT_MODEL,
-    /** False without a GitHub token — the per-project model picker has nothing to talk to. */
+    /** False without a GitHub token — the per-project model screen has nothing to talk to. */
     val isGitHubConfigured: Boolean = false,
-    /** Non-null while the model picker is open for one project. */
-    val agentModelDialog: AgentModelDialogState? = null,
     /** Non-null while a classified command is waiting for the user's approval. */
     val pendingConfirmation: IntentConfirmation? = null,
     /** Issue counts per project name; missing means "not requested yet". */

@@ -142,11 +142,16 @@ jobs:
         issue: ${{ fromJson(needs.queue.outputs.issues) }}
     env:
       GH_TOKEN: ${{ github.token }}
-      # Which service serves AGENT_MODEL, and therefore which API key secret this run spends.
+      # Which service serves TEC's model, and therefore which API key secret this run spends.
       # "openrouter" (free tier) or "minimax" (your own paid MiniMax account). Set it with an
-      # AGENT_PROVIDER repo/environment variable, or from the MIA app's model picker, which
-      # rewrites this default and the AGENT_MODEL ones together — they must always agree.
-      AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+      # AGENT_PROVIDER_TEC repo/environment variable (or the repo-wide AGENT_PROVIDER, which
+      # every role falls back to), or from the MIA app's model management screen, which rewrites
+      # this default and TEC's AGENT_MODEL one together — they must always agree.
+      #
+      # It keeps the plain AGENT_PROVIDER name on purpose: this is TEC's own job, every step in
+      # it belongs to TEC, and the shell below reads $AGENT_PROVIDER throughout. Only the QC
+      # gate at the end of the job runs as a different role, and it names its own variables.
+      AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER_TEC || vars.AGENT_PROVIDER || 'openrouter' }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
       ISSUE_NUMBER: ${{ matrix.issue }}
       # The issue's title and body are untrusted user input. They are never carried in a YAML
@@ -716,7 +721,7 @@ jobs:
           # Read only when AGENT_PROVIDER is "minimax". The MIA app pushes it alongside the
           # OpenRouter one, so switching provider needs no visit to GitHub's own settings.
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL_TEC || vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
           # Optional: "model-a,model-b" tries model-b when model-a cannot produce a build that
           # compiles. All of them must be served by AGENT_PROVIDER.
           AGENT_MODEL_LADDER: ${{ vars.AGENT_MODEL_LADDER }}
@@ -946,10 +951,15 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-          # Raw model id — NO provider prefix: qc-review.js calls the provider's API directly,
-          # unlike the ladder above, which addresses models through OpenCode. Kept under its own
-          # name because AGENT_MODEL here is the ladder's winning model, for the PR body.
-          QC_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          # QC's own model and provider — role-scoped names, so they sit next to the
+          # AGENT_MODEL below (the ladder's winning model, which the PR body reports) without
+          # colliding with it, and so this gate can run on a different model than the agent
+          # whose diff it is reviewing. Raw model id — NO provider prefix: qc-review.js calls
+          # the provider's API directly, unlike the ladder above, which goes through OpenCode.
+          AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          # Not inherited from the job's AGENT_PROVIDER: that one is TEC's, and QC may be on
+          # another service entirely, which would mean another key and another host.
+          AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1022,7 +1032,6 @@ jobs:
             gh pr diff "$PR_NUMBER" > "${RUNNER_TEMP}/pr.diff" || true
             rm -f "${RUNNER_TEMP}/qc-verdict.txt"
             PR_NUMBER="$PR_NUMBER" \
-            AGENT_MODEL="$QC_MODEL" \
             DIFF_FILE="${RUNNER_TEMP}/pr.diff" \
             QC_VERDICT_FILE="${RUNNER_TEMP}/qc-verdict.txt" \
               node .github/scripts/qc-review.js || true

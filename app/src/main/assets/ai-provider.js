@@ -5,6 +5,9 @@
 // lives on, which secret to spend, how to walk down to a spare key when the first one is out of
 // quota, and how to post the answer back onto an issue.
 //
+// Each role resolves its own model — see resolveProvider — so a repo can put its QC reviewer on
+// a different model than its PO without splitting this file in two.
+//
 // It exists because there is now more than one caller. ai-role-review.js (the @po/@qc advisors)
 // and decompose-brief.js (the PO decomposing a brief into TEC-sized issues) must agree on all of
 // it: a repo pointed at MiniMax has to stay pointed at MiniMax for every role, and a rate-limited
@@ -45,20 +48,30 @@ const PROVIDERS = {
 const DEFAULT_MODEL = "minimax/minimax-m3:free";
 
 /**
- * The provider, keys and model this run should use, read out of `env`.
+ * The provider, keys and model one ROLE should use, read out of `env`.
  *
  * The model id is passed to the provider's API verbatim — no provider prefix, unlike the TEC
  * workflow, which addresses models through OpenCode.
+ *
+ * `role` ("po", "qc", "brief", …) is what lets one repo run each member of its AI team on a
+ * different model: the reviewer can sit on a big model while the brief decomposer stays on a
+ * free one. It reads `AGENT_MODEL_<ROLE>` first and falls back to the repo-wide `AGENT_MODEL`,
+ * so a repo bootstrapped before roles existed — and any caller that passes no role — behaves
+ * exactly as it did when there was only one model. `AGENT_PROVIDER_<ROLE>` follows the same
+ * ladder, and must always move with the model: it is what decides which key is spent and which
+ * host is called.
  */
-function resolveProvider(env) {
-  const id = env.AGENT_PROVIDER || "openrouter";
+function resolveProvider(env, role) {
+  const suffix = role ? `_${String(role).toUpperCase()}` : "";
+  const id = env[`AGENT_PROVIDER${suffix}`] || env.AGENT_PROVIDER || "openrouter";
   const provider = PROVIDERS[id] || PROVIDERS.openrouter;
   const keys = provider.envKeys
     .map((name) => (env[name] || "").trim())
     .filter((key, i, all) => key && all.indexOf(key) === i);
-  const model = env.AGENT_MODEL || DEFAULT_MODEL;
+  const model = env[`AGENT_MODEL${suffix}`] || env.AGENT_MODEL || DEFAULT_MODEL;
   return {
     id,
+    role: role || null,
     label: provider.label,
     url: provider.url,
     reasoning: provider.reasoning,

@@ -85,9 +85,11 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # QC's own model, falling back to the repo-wide one and then to this literal
+          # default, which the MIA app's model management screen rewrites.
           # Raw model id — NO provider prefix: this script calls the provider's API directly.
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
-          AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+          AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff

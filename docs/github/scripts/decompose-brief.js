@@ -40,7 +40,10 @@ const PLANNED_LABEL = "brief-planned";
 const FAILED_LABEL = "brief-failed";
 const BLOCKED_LABEL = "blocked";
 
-const ai = resolveProvider(process.env);
+// The brief manager's own model: AGENT_MODEL_BRIEF when the repo sets one, the repo-wide
+// AGENT_MODEL otherwise. Splitting a brief into TEC-sized issues is a planning job, so a
+// repo may well want it on a different model than the one that implements them.
+const ai = resolveProvider(process.env, "brief");
 
 const post = (body) =>
   postIssueComment({ repo, issueNumber: briefNumber, token: githubToken, body });

@@ -26,7 +26,7 @@ class RepoBootstrapperTest {
     private val encryptor = SecretEncryptor { plaintext, publicKey -> "sealed($plaintext|$publicKey)" }
 
     private fun bootstrapper(api: FakeGitHubApi, template: String = "") =
-        RepoBootstrapper(api, base64, encryptor, files, templateRepo = template)
+        RepoBootstrapper(api, base64, encryptor, { files }, templateRepo = template)
 
     @Test
     fun `plain creation uploads all team files, creates the queue labels, sets secret`() = runBlocking {

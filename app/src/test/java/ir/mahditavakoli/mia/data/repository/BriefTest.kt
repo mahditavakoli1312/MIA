@@ -30,7 +30,7 @@ class BriefTest {
             api = api,
             base64 = base64,
             encryptor = SecretEncryptor { plaintext, _ -> plaintext },
-            files = emptyList()
+            files = { emptyList() }
         ),
         agentModelMigrator = AgentModelMigrator(api, base64, decoder),
         agentApiKeyProvider = { null },

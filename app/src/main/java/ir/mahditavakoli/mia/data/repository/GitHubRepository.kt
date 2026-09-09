@@ -12,6 +12,7 @@ import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import ir.mahditavakoli.mia.network.github.UpdateIssueBody
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.AgentRole
 import ir.mahditavakoli.mia.network.openrouter.providerFor
 import ir.mahditavakoli.mia.text.PersianText
 import kotlin.math.absoluteValue
@@ -351,6 +352,19 @@ class GitHubRepository(
     }
 
     /**
+     * The model each role of this project's team runs on right now, read straight from the repo
+     * for the same reason [agentModelFor] is: the files are the source of truth, and they can be
+     * edited on GitHub without MIA ever seeing it.
+     *
+     * A role absent from the map is one this repo's files say nothing about — an older bootstrap
+     * missing that workflow. A repo from before role-scoped models answers the same id for every
+     * role, which is exactly what it runs.
+     */
+    suspend fun agentModelsFor(projectName: String): Result<Map<AgentRole, String>> = runCatching {
+        agentModelMigrator.currentModels(owner(), repoNameFor(projectName))
+    }
+
+    /**
      * Repoints this project's repo at [model]. See [AgentModelMigrator] for what that rewrites.
      *
      * The rewrite is preceded by making sure the repo actually holds the API key that model
@@ -363,13 +377,31 @@ class GitHubRepository(
     suspend fun setAgentModel(
         projectName: String,
         model: String
+    ): Result<AgentModelMigrator.Outcome> =
+        setAgentModels(projectName, AgentRole.REPO_ROLES.associateWith { model })
+
+    /**
+     * Points each role of this project's team at its own model — the multi-role counterpart to
+     * [setAgentModel], and what the project's model management screen calls.
+     *
+     * Every provider named by any of the models has its key pushed first, for the reason
+     * [ensureProviderSecret] gives: a repo pointed at MiniMax without a `MINIMAX_API_KEY` secret
+     * produces a clean-looking commit and then fails on the next run. With a model per role that
+     * matters more, not less — one role on MiniMax is enough to need the key, and the roles that
+     * stayed on OpenRouter would keep working and hide the breakage.
+     */
+    suspend fun setAgentModels(
+        projectName: String,
+        models: Map<AgentRole, String>
     ): Result<AgentModelMigrator.Outcome> = runCatching {
         val owner = owner()
         val repo = repoNameFor(projectName)
-        val provider = providerFor(model)
-        val secretWarning = ensureProviderSecret(owner, repo, provider)
-        val outcome = agentModelMigrator.setModel(owner, repo, model)
-        if (secretWarning == null) outcome else outcome.copy(failed = outcome.failed + secretWarning)
+        val secretWarnings = models.values
+            .map(::providerFor)
+            .toSet()
+            .mapNotNull { provider -> ensureProviderSecret(owner, repo, provider) }
+        val outcome = agentModelMigrator.setModels(owner, repo, models)
+        outcome.copy(failed = outcome.failed + secretWarnings)
     }
 
     /**

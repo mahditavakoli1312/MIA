@@ -13,21 +13,25 @@ import ir.mahditavakoli.mia.ui.issues.IssueDetailScreen
 import ir.mahditavakoli.mia.ui.issues.IssuesScreen
 import ir.mahditavakoli.mia.ui.main.MainScreen
 import ir.mahditavakoli.mia.ui.main.MainViewModel
+import ir.mahditavakoli.mia.ui.models.DefaultModelsScreen
+import ir.mahditavakoli.mia.ui.models.ProjectModelsScreen
 import ir.mahditavakoli.mia.ui.spend.SpendScreen
 
 /** One issue, named the way a notification can carry it: by project name and issue number. */
 data class IssueDeepLink(val projectName: String, val issueNumber: Int)
 
 /**
- * The signed-in half of the app and the five screens it moves between: the project list, one
- * project's issues, one issue, the form for a new brief, and the token-spend report.
+ * The signed-in half of the app and the seven screens it moves between: the project list, one
+ * project's issues, one issue, the form for a new brief, the token-spend report, one project's
+ * AI-team models, and the models new projects start on.
  *
- * Navigation is four saveable values rather than a nav library. The graph is a straight line
- * (projects → issues → one issue, with the new-brief screen as a leaf off the issues list and the
- * spend screen as a leaf off the project list) with one entry point from outside ([deepLink], from
- * a notification) and no arguments beyond a project name and an issue number, so a whole navigation
- * dependency would buy nothing that `rememberSaveable` plus a [BackHandler] doesn't already give —
- * including surviving rotation and process death.
+ * Navigation is a handful of saveable values rather than a nav library. The graph is a straight
+ * line (projects → issues → one issue, with the new-brief screen as a leaf off the issues list and
+ * the spend, per-project models and default models screens as leaves off the project list) with
+ * one entry point from outside ([deepLink], from a notification) and no arguments beyond a project
+ * name and an issue number, so a whole navigation dependency would buy nothing that
+ * `rememberSaveable` plus a [BackHandler] doesn't already give — including surviving rotation and
+ * process death.
  *
  * [MainViewModel] is held here, above the screens, so returning from an issues screen can
  * refresh that project's counts on the card the user is about to see again.
@@ -53,6 +57,12 @@ fun MiaApp(
     // True: the spend screen is on top of the project list. It hangs off the list rather than off
     // a project because the report it shows spans every project at once.
     var showingSpend by rememberSaveable { mutableStateOf(false) }
+    // Non-null: the model screen for this project's AI team is on top of the list. A project
+    // name rather than a flag, because it is reached from a card and is about that repo.
+    var modelsProject by rememberSaveable { mutableStateOf<String?>(null) }
+    // True: the default-models screen is on top of the list. Like the spend screen, it belongs
+    // to no one project — it is what the *next* project will start on.
+    var showingDefaultModels by rememberSaveable { mutableStateOf(false) }
     // Bumped when a brief is filed, which is what makes the issues list behind re-read GitHub
     // and show it. A counter rather than a boolean: two briefs in a row must each trigger it.
     var issuesReloadKey by rememberSaveable { mutableStateOf(0) }
@@ -63,19 +73,33 @@ fun MiaApp(
         val link = deepLink ?: return@LaunchedEffect
         issuesProject = link.projectName
         openIssueNumber = link.issueNumber
-        // A tapped notification is about one issue, so it takes the user out of the spend report
-        // rather than opening the issue behind it.
+        // A tapped notification is about one issue, so it takes the user out of whichever
+        // project-list leaf they were on rather than opening the issue behind it.
         showingSpend = false
+        showingDefaultModels = false
+        modelsProject = null
         onDeepLinkHandled()
     }
 
     val project = issuesProject
     val issueNumber = openIssueNumber
 
+    val modelsFor = modelsProject
+
     when {
         showingSpend -> {
             BackHandler { showingSpend = false }
             SpendScreen(onBack = { showingSpend = false })
+        }
+
+        showingDefaultModels -> {
+            BackHandler { showingDefaultModels = false }
+            DefaultModelsScreen(onBack = { showingDefaultModels = false })
+        }
+
+        modelsFor != null -> {
+            BackHandler { modelsProject = null }
+            ProjectModelsScreen(projectName = modelsFor, onBack = { modelsProject = null })
         }
 
         project != null && writingBrief -> {
@@ -122,7 +146,9 @@ fun MiaApp(
             onLogout = onLogout,
             viewModel = mainViewModel,
             onOpenIssues = { openedProject -> issuesProject = openedProject.name },
-            onOpenSpend = { showingSpend = true }
+            onOpenSpend = { showingSpend = true },
+            onOpenProjectModels = { openedProject -> modelsProject = openedProject.name },
+            onOpenDefaultModels = { showingDefaultModels = true }
         )
     }
 }

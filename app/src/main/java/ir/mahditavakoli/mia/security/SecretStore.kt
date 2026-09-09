@@ -7,6 +7,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.AgentRole
 import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
 import java.io.IOException
@@ -109,19 +110,51 @@ class SecretStore(context: Context) {
     /**
      * Which model the app's own typed-command pipeline runs on, chosen in Settings.
      *
-     * Separate from the per-repo agent model on purpose: that one lives in the repo's workflow
-     * files on GitHub and is picked per project, while this is a single device-local preference
-     * for the two calls MIA makes on the phone. An id that is no longer offered (a stale
-     * preference from an older build) falls back to [DEFAULT_TEXT_MODEL] rather than failing
-     * every command with a 404.
+     * Separate from the per-repo agent models on purpose: those live in each repo's workflow
+     * files on GitHub and are picked per project and per role, while this is a single
+     * device-local preference for the two calls MIA makes on the phone. Kept as a named property
+     * because that is how the command pipeline reads it; [AgentRole.APP] is the same value.
      */
     var textModelId: String
-        get() = prefs.getString(KEY_TEXT_MODEL, null)
+        get() = defaultModelFor(AgentRole.APP)
+        set(value) {
+            setDefaultModelFor(AgentRole.APP, value)
+        }
+
+    /**
+     * The model a role gets in a **newly created** project, and — for [AgentRole.APP] — the one
+     * MIA's own typed commands run on right now.
+     *
+     * Two different lifetimes behind one accessor, and that is the honest shape of it. [APP] has
+     * no repo side at all, so this preference *is* its setting and changing it takes effect on
+     * the next command. Every other role lives in a repo's workflow files, so this is only the
+     * value written into the next repo MIA creates; existing projects are changed from their own
+     * model screen, which commits to GitHub. The defaults screen says exactly this, because a
+     * user who expected the second meaning for the first role would be surprised twice.
+     *
+     * An id that is no longer offered (a stale preference from an older build) falls back to
+     * [DEFAULT_TEXT_MODEL] rather than failing every command with a 404.
+     */
+    fun defaultModelFor(role: AgentRole): String =
+        prefs.getString(defaultModelKey(role), null)
             ?.takeIf { id -> agentModelOrNull(id) != null }
             ?: DEFAULT_TEXT_MODEL
-        set(value) {
-            prefs.edit().putString(KEY_TEXT_MODEL, value).apply()
-        }
+
+    fun setDefaultModelFor(role: AgentRole, modelId: String) {
+        prefs.edit().putString(defaultModelKey(role), modelId).apply()
+    }
+
+    /** Every role's default in one read, which is what both model screens actually want. */
+    fun defaultModels(): Map<AgentRole, String> =
+        AgentRole.entries.associateWith { defaultModelFor(it) }
+
+    /**
+     * [AgentRole.APP] keeps the original `text_model_id` key rather than a role-shaped one, so
+     * a user who had already chosen an in-app model keeps it across this upgrade instead of
+     * being silently reset to the default.
+     */
+    private fun defaultModelKey(role: AgentRole): String =
+        if (role == AgentRole.APP) KEY_TEXT_MODEL else "$KEY_DEFAULT_MODEL_PREFIX${role.id}"
 
     /** Whether newly created tasks are handed to the agent (labeled "by-agent") by default. */
     var agentHandledByDefault: Boolean
@@ -165,6 +198,12 @@ class SecretStore(context: Context) {
         const val KEY_OPENROUTER_FALLBACK = "openrouter_fallback_api_key"
         const val KEY_MINIMAX = "minimax_api_key"
         const val KEY_TEXT_MODEL = "text_model_id"
+
+        /**
+         * Per-role defaults for new projects: `default_model_tec`, `default_model_qc`, … The
+         * app's own model is deliberately NOT stored under this prefix — see [defaultModelKey].
+         */
+        const val KEY_DEFAULT_MODEL_PREFIX = "default_model_"
         const val KEY_AGENT_DEFAULT = "agent_handled_by_default"
         const val KEY_CONFIRM_BEFORE_EXECUTE = "confirm_before_execute"
         const val KEY_MONTHLY_TOKEN_BUDGET = "monthly_token_budget"

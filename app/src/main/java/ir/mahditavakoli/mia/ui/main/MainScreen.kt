@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FabPosition
@@ -64,6 +65,10 @@ import kotlinx.coroutines.delay
  *        the entry point, so this is what the card's issues strip taps into.
  * @param onOpenSpend opens the token-spend screen. It lives in the top bar rather than on a card
  *        because the number it shows is the whole system's, not one project's.
+ * @param onOpenProjectModels opens one project's model screen — which model each seat of its AI
+ *        team runs on. Reached from the card, since it is about that project's repo.
+ * @param onOpenDefaultModels opens the models new projects start on. In the top bar next to
+ *        Settings for the mirror-image reason [onOpenSpend] is: it belongs to no one project.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,7 +76,9 @@ fun MainScreen(
     onLogout: () -> Unit = {},
     viewModel: MainViewModel = viewModel(),
     onOpenIssues: (Project) -> Unit = {},
-    onOpenSpend: () -> Unit = {}
+    onOpenSpend: () -> Unit = {},
+    onOpenProjectModels: (Project) -> Unit = {},
+    onOpenDefaultModels: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val amplitude by viewModel.micAmplitude.collectAsState()
@@ -168,6 +175,12 @@ fun MainScreen(
                                 contentDescription = "هزینهٔ توکن"
                             )
                         }
+                        IconButton(onClick = onOpenDefaultModels) {
+                            Icon(
+                                imageVector = Icons.Filled.Tune,
+                                contentDescription = "مدل‌های پیش‌فرض"
+                            )
+                        }
                         IconButton(onClick = { showSettings = true }) {
                             Icon(
                                 imageVector = Icons.Filled.Settings,
@@ -248,7 +261,7 @@ fun MainScreen(
                                 project = project,
                                 modifier = Modifier.padding(bottom = 12.dp),
                                 canChangeAgentModel = uiState.isGitHubConfigured,
-                                onChangeAgentModel = { viewModel.onChangeAgentModelClick(project) },
+                                onChangeAgentModel = { onOpenProjectModels(project) },
                                 // Null without GitHub configured: no repo, so no issues strip.
                                 issueSummary = uiState.issueSummaries[project.name]
                                     ?.takeIf { uiState.isGitHubConfigured },
@@ -290,14 +303,6 @@ fun MainScreen(
             }
         }
 
-        uiState.agentModelDialog?.let { dialog ->
-            AgentModelDialog(
-                state = dialog,
-                onConfirm = viewModel::onAgentModelSelected,
-                onDismiss = viewModel::dismissAgentModelDialog
-            )
-        }
-
         uiState.pendingConfirmation?.let { confirmation ->
             IntentConfirmationSheet(
                 state = confirmation,
@@ -317,7 +322,6 @@ fun MainScreen(
                 openRouterApiKey = uiState.openRouterApiKey,
                 openRouterFallbackApiKey = uiState.openRouterFallbackApiKey,
                 miniMaxApiKey = uiState.miniMaxApiKey,
-                textModelId = uiState.textModelId,
                 onAgentHandledChange = viewModel::onAgentHandledChange,
                 onConfirmBeforeExecuteChange = viewModel::onConfirmBeforeExecuteChange,
                 onGeminiApiKeyChange = viewModel::onGeminiApiKeyChange,
@@ -328,7 +332,6 @@ fun MainScreen(
                 onSaveOpenRouterFallbackApiKey = viewModel::saveOpenRouterFallbackApiKey,
                 onMiniMaxApiKeyChange = viewModel::onMiniMaxApiKeyChange,
                 onSaveMiniMaxApiKey = viewModel::saveMiniMaxApiKey,
-                onTextModelSelected = viewModel::onTextModelSelected,
                 onDismiss = { showSettings = false }
             )
         }

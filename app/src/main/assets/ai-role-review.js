@@ -31,7 +31,12 @@ const {
   missingKeyMessage,
 } = require("./ai-provider.js");
 
-const ai = resolveProvider(process.env);
+/** The model, provider and keys one role runs on. Each tagged role resolves its own. */
+const providerFor = (role) => resolveProvider(process.env, role);
+
+// Only for the "is any key configured at all" check and the missing-key message below: the
+// keys are per *provider*, not per role, and every role in a repo shares the same secrets.
+const anyAi = providerFor(null);
 
 // Each role gets its own "personality" (system prompt). Edit these freely.
 //
@@ -39,8 +44,13 @@ const ai = resolveProvider(process.env);
 // free model, which implements an issue from the issue text and nothing else. So the roles are
 // asked for artefacts TEC can act on — a rewritten brief, a checkable list — rather than the
 // paragraphs of advice a human reviewer would write for another human.
+//
+// `role` is the env-var suffix this one reads its model from — @po runs on AGENT_MODEL_PO,
+// @qc on AGENT_MODEL_QC — so the two can sit on different models in the same repo. Both fall
+// back to the repo-wide AGENT_MODEL when no role-scoped one is set.
 const ROLES = {
   "@po": {
+    role: "po",
     label: "🧭 Product Owner (PO)",
     system:
       "You are the Product Owner of this repository. The issue you are looking at will be " +
@@ -70,6 +80,7 @@ const ROLES = {
       "End with one line: comment `@tec` (or add the `by-agent` label) to queue it for the agent.",
   },
   "@qc": {
+    role: "qc",
     label: "✅ QC Team",
     system:
       "You are the QA/QC engineer for this repository. The work will be done by TEC, an " +
@@ -97,13 +108,16 @@ const ROLES = {
   },
 };
 
-// A per-role line: what this one answer cost, shown small so it doesn't crowd the advice.
-function usageLine(usage) {
+// A per-role line: what this one answer cost and which model wrote it, shown small so it
+// doesn't crowd the advice. The model belongs here rather than only in the footer — with a
+// model per role, the footer can no longer speak for every section at once.
+function usageLine(usage, ai) {
   if (!usage) return "";
   const total = usageTotal(usage);
   return (
     `\n\n<sub>🧾 ${fmt(total)} tokens ` +
-    `(prompt ${fmt(usage.prompt_tokens)} + output ${fmt(usage.completion_tokens)})</sub>`
+    `(prompt ${fmt(usage.prompt_tokens)} + output ${fmt(usage.completion_tokens)}) · ` +
+    `\`${ai.model}\`</sub>`
   );
 }
 
@@ -112,8 +126,8 @@ const postComment = (body) =>
   postIssueComment({ repo, issueNumber, token: githubToken, body });
 
 async function main() {
-  if (ai.keys.length === 0) {
-    await postComment(`🤖 The AI role bot could not run.\n\n${missingKeyMessage(ai)}`);
+  if (anyAi.keys.length === 0) {
+    await postComment(`🤖 The AI role bot could not run.\n\n${missingKeyMessage(anyAi)}`);
     process.exit(1);
   }
 
@@ -138,20 +152,27 @@ async function main() {
     `format even when a section is short.`;
 
   const sections = [];
-  const spend = { tokens: 0, cost: 0, calls: 0 };
+  const spend = { tokens: 0, cost: 0, calls: 0, models: [], allFree: true };
   for (const tag of tagged) {
-    const { label, system } = ROLES[tag];
+    const { role, label, system } = ROLES[tag];
+    // Resolved per role, inside the loop: two roles answering the same comment may be running
+    // on two different models, and each one's footer has to name the model that wrote it.
+    const ai = providerFor(role);
     try {
       const { text, usage } = await askAI(ai, { system, user: context });
-      sections.push(`### ${label}\n${text}${usageLine(usage)}`);
+      sections.push(`### ${label}\n${text}${usageLine(usage, ai)}`);
       if (usage) {
         spend.tokens += usageTotal(usage);
         spend.cost += usage.cost || 0;
         spend.calls += 1;
       }
+      if (!spend.models.includes(ai.model)) spend.models.push(ai.model);
+      // One paid role makes the whole reply paid, so this only stays true while every
+      // model that actually answered was a free one.
+      if (!ai.isFree) spend.allFree = false;
     } catch (err) {
       // Free models are rate/quota capped — degrade cleanly instead of crashing.
-      sections.push(`### ${label}\n⚠️ Could not get a response: ${err.message}`);
+      sections.push(`### ${label}\n⚠️ Could not get a response from \`${ai.model}\`: ${err.message}`);
     }
   }
 
@@ -162,13 +183,12 @@ async function main() {
 
 // The bottom line for the whole reply, mirroring what TEC posts after implementing an issue,
 // so one issue's comment thread reads as a single running ledger.
-function spendFooter({ tokens, cost, calls }) {
+function spendFooter({ tokens, cost, calls, models, allFree }) {
   if (calls === 0) return "";
-  const money =
-    cost > 0 ? `$${cost.toFixed(4)}` : ai.isFree ? "$0.00 (free model)" : "$0.00";
+  const money = cost > 0 ? `$${cost.toFixed(4)}` : allFree ? "$0.00 (free model)" : "$0.00";
   return (
     `\n\n---\n\n🧾 **Spend for this reply** — ${fmt(tokens)} tokens · ` +
-    `${money} · \`${ai.model}\``
+    `${money} · ${models.map((m) => `\`${m}\``).join(" + ")}`
   );
 }
 

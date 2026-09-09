@@ -39,7 +39,8 @@ import ir.mahditavakoli.mia.data.model.Task
 /**
  * @param canChangeAgentModel false without a GitHub token — there is no repo to repoint, so the
  *        button is hidden rather than shown and then failing on tap.
- * @param onChangeAgentModel opens the picker that repoints this project's repo (@tec/@po/@qc).
+ * @param onChangeAgentModel opens this project's model screen — a model per seat of its AI team
+ *        (@tec / @po / @qc / the brief manager), each repointed in that repo's own workflows.
  * @param issueSummary this project's open/closed issue counts, or null when GitHub isn't
  *        configured at all — the whole issues strip is then left off the card.
  * @param onOpenIssues opens the full issues list for this project.
@@ -72,7 +73,7 @@ fun ProjectCard(
                     IconButton(onClick = onChangeAgentModel) {
                         Icon(
                             imageVector = Icons.Filled.SmartToy,
-                            contentDescription = "تغییر مدل ایجنت این پروژه",
+                            contentDescription = "مدل‌های تیم AI این پروژه",
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }

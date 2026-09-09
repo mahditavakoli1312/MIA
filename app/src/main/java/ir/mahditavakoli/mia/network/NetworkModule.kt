@@ -4,6 +4,7 @@ import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
+import ir.mahditavakoli.mia.data.repository.AgentTeamFiles
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
@@ -86,10 +87,28 @@ object NetworkModule {
         "design-example.kt" to "app/src/main/java/mia/design/ExampleScreen.kt"
     )
 
-    /** Reads each bundled asset and pairs it with the path it should live at in a new repo. */
-    fun readBootstrapFiles(): List<BootstrapFile> = BOOTSTRAP_ASSETS.map { (asset, path) ->
-        val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
-        BootstrapFile(repoPath = path, content = content)
+    /**
+     * Reads each bundled asset and pairs it with the path it should live at in a new repo, with
+     * the user's per-role model defaults written into it on the way out.
+     *
+     * The rewrite happens here rather than after the repo exists because the alternative is a
+     * repo that is briefly wrong: bootstrap, then a second pass of commits to move four roles
+     * onto the models the user already asked for — visible in the history, and a window in which
+     * a `@tec` typed straight after creation runs on the wrong model. The assets on disk are
+     * never touched; only the copy being uploaded.
+     */
+    fun readBootstrapFiles(): List<BootstrapFile> {
+        val models = secretStore.defaultModels().filterKeys { it.envSuffix != null }
+        return BOOTSTRAP_ASSETS.map { (asset, path) ->
+            val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
+            val role = AgentTeamFiles.MODEL_BEARING_PATHS[path]
+            val withModels = if (role == null) {
+                content
+            } else {
+                AgentTeamFiles.applyRoleModels(content, models, role).text
+            }
+            BootstrapFile(repoPath = path, content = withModels)
+        }
     }
 
     /**
@@ -110,7 +129,7 @@ object NetworkModule {
             api = gitHubApi,
             base64 = AndroidBase64Encoder,
             encryptor = LibsodiumSecretEncryptor,
-            files = readBootstrapFiles()
+            files = ::readBootstrapFiles
         )
     }
 
