@@ -11,10 +11,22 @@
 #
 # Labels this workflow uses:
 #   brief          — the input, attached by the MIA app when the user files an intent
+#   needs-split    — a child that came back "L": too big for one run, so the PO splits it too
 #   brief-planned  — the receipt of a finished decomposition; a second run stops when it sees it
 #   brief-failed   — the model could not produce a usable plan; the brief waits for a human
 #   blocked        — a child issue whose prerequisites have not landed yet
 #   by-agent       — a child issue that is startable now (TEC's queue; see agent-issue-worker.yml)
+#
+# The same job also runs in SPLIT mode, on a `needs-split` issue rather than a brief. An "L" item
+# is a brief that was not split far enough, and leaving it for "manual splitting" was the quietest
+# way this pipeline had of stopping: the plan looked complete and the queue was empty. The PO that
+# wrote the plan takes it back instead, down to a depth cap, where it narrows the issue in place
+# rather than splitting forever.
+#
+# The bot's own `needs-split` label starts no second run — GitHub does not fire workflows for
+# labels applied with GITHUB_TOKEN — and it does not need to: that split happens inline, in the
+# same process that made the plan. The `labeled` trigger below is therefore for a HUMAN adding
+# the label by hand, and for the shepherd, which dispatches this workflow explicitly.
 name: Decompose Brief (PO)
 
 on:
@@ -22,12 +34,19 @@ on:
     # `opened` covers a brief created with the label (which is how the app files one) and
     # `labeled` covers a human attaching it afterwards, or re-attaching it to retry.
     types: [opened, labeled]
+  # Split mode, for the shepherd and for a human who wants one issue broken up on demand.
+  workflow_dispatch:
+    inputs:
+      split_issue:
+        description: "Issue number to split into smaller issues (leave empty for none)"
+        required: false
+        type: string
 
 # Per-brief and never cancelling: when GitHub delivers both `opened` and `labeled` for the same
 # new issue, the second run finds `brief-planned` already there and stops, instead of racing the
 # first one and opening the whole plan twice.
 concurrency:
-  group: decompose-brief-${{ github.event.issue.number }}
+  group: decompose-brief-${{ github.event.issue.number || inputs.split_issue }}
   cancel-in-progress: false
 
 permissions:
@@ -39,8 +58,10 @@ jobs:
     # Only briefs, and only when this event is about the brief label itself — a `labeled` event
     # for some unrelated label on a brief would otherwise re-run the decomposition.
     if: >
-      contains(github.event.issue.labels.*.name, 'brief') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'brief')
+      inputs.split_issue != '' ||
+      (contains(github.event.issue.labels.*.name, 'brief') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'brief')) ||
+      (github.event.action == 'labeled' && github.event.label.name == 'needs-split')
     runs-on: ubuntu-latest
     steps:
       # Adding a label to an issue does not create a missing one, so the whole set has to exist
@@ -58,6 +79,7 @@ jobs:
           create brief-failed b60205 "The PO could not decompose this brief"
           create blocked d93f0b "Waiting on another issue"
           create by-agent 1d76db "Queued for the TEC agent"
+          create needs-split fbca04 "Too big for one run — the PO is splitting it"
 
       # The plan names real files and follows this repo's conventions, so the script needs the
       # repo itself: AGENTS.md and `git ls-files` are its grounding.
@@ -84,7 +106,10 @@ jobs:
           # `gh` in the missing-script branch below reads GH_TOKEN, not GITHUB_TOKEN.
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          BRIEF_NUMBER: ${{ github.event.issue.number }}
+          # Exactly one of these is set. SPLIT_ISSUE wins inside the script, and it is what turns
+          # a `needs-split` label — or a manual dispatch — into a second decomposition pass.
+          BRIEF_NUMBER: ${{ github.event.label.name == 'needs-split' && '' || github.event.issue.number }}
+          SPLIT_ISSUE: ${{ inputs.split_issue || (github.event.label.name == 'needs-split' && github.event.issue.number) || '' }}
           # The brief's title and body are untrusted user input. They reach the script as env
           # vars rather than as shell interpolation, so nothing in them can run.
           BRIEF_TITLE: ${{ github.event.issue.title }}
@@ -94,7 +119,7 @@ jobs:
           # Repos bootstrapped before briefs shipped have no script — say so on the issue rather
           # than failing with a stack trace nobody asked for.
           if [ ! -f .github/scripts/decompose-brief.js ]; then
-            gh issue comment "$BRIEF_NUMBER" --body "🧭 This repo has no \`.github/scripts/decompose-brief.js\` yet, so the brief cannot be decomposed. Copy \`docs/github/scripts/\` (all of it — the script needs \`ai-provider.js\` too) into this repo, then re-add the \`brief\` label."
+            gh issue comment "${BRIEF_NUMBER:-$SPLIT_ISSUE}" --body "🧭 This repo has no \`.github/scripts/decompose-brief.js\` yet, so the brief cannot be decomposed. Copy \`docs/github/scripts/\` (all of it — the script needs \`ai-provider.js\` too) into this repo, then re-add the \`brief\` label."
             exit 0
           fi
           node .github/scripts/decompose-brief.js

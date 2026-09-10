@@ -36,6 +36,8 @@ const {
   postComment,
   missingKeyMessage,
 } = require("./ai-provider.js");
+const { HUMAN } = require("./agent-voice.js");
+const { updateLedger } = require("./ledger.js");
 
 const repo = process.env.REPO; // "owner/name"
 const githubToken = process.env.GITHUB_TOKEN;
@@ -69,11 +71,14 @@ const REBRIEF_MARKER = "<!-- po-rebrief -->";
 const MAX_ROUNDS = 2;
 
 /**
- * How many times the PO may re-scope one issue before it is paused for a human. 0 — the default —
- * means never pause: the loop keeps going, which is the whole point of it.
+ * How many times the PO may re-scope one issue before a person is asked about it. 0 — the
+ * default — means never ask: the loop keeps going, which is the whole point of it.
  *
- * Set it to a small number on a repo running free models if you would rather the day's quota
- * survive an issue that two agents cannot agree on.
+ * It does NOT mean "give up". What is past the ceiling is an OWNED PAUSE (§5.11): the issue
+ * carries the decision that is actually needed, the options, the answer the team will proceed on
+ * by itself, and a deadline — and any human comment on the issue resumes it. Set it to a small
+ * number on a repo running free models if you would rather the day's quota survive an issue two
+ * agents cannot agree on.
  */
 const MAX_CYCLES = Number.parseInt(process.env.AGENT_MAX_CYCLES || "0", 10) || 0;
 const DIFF_LIMIT = 40000;
@@ -119,11 +124,13 @@ const label = (number, labels) =>
 const unlabel = (number, name) =>
   gh(`/issues/${number}/labels/${encodeURIComponent(name)}`, { method: "DELETE" }).catch(() => {});
 
-const commentOnPr = (body) =>
-  postComment({ repo, issueNumber: prNumber, token: githubToken, body });
+// Both posters demand a handoff (postComment enforces it). QC is the role most able to strand a
+// task — it is the one that says "no" — so every one of its exits below names the next owner.
+const commentOnPr = (body, handoff) =>
+  postComment({ repo, issueNumber: prNumber, token: githubToken, body, handoff });
 
-const commentOnIssue = (body) =>
-  postComment({ repo, issueNumber, token: githubToken, body });
+const commentOnIssue = (body, handoff) =>
+  postComment({ repo, issueNumber, token: githubToken, body, handoff });
 
 /**
  * Ends the run without blocking anything: the PR is labelled `qc-skipped`, which is what TEC's
@@ -136,8 +143,22 @@ async function skip(reason) {
     `✅ **QC could not review this pull request.**\n\n${reason}\n\n` +
       "Merging is **not** blocked — the gate falls back to merging without a review rather than " +
       "leaving the change stuck." +
-      (runUrl ? `\n\n[Workflow run](${runUrl})` : "")
+      (runUrl ? `\n\n[Workflow run](${runUrl})` : ""),
+    {
+      from: "qc",
+      to: "tec",
+      next: "بدون بازبینی QC merge کن — دروازه باز است",
+      pr: prNumber,
+      issue: issueNumber,
+      sla: "60m",
+    }
   );
+  await updateLedger({
+    repo,
+    issueNumber,
+    token: githubToken,
+    patch: { state: "qc-skipped", owner: "tec", next: "merge بدون بازبینی", branchOrPr: `#${prNumber}` },
+  });
   console.log(`QC skipped: ${reason}`);
 }
 
@@ -219,6 +240,11 @@ function validateVerdict(parsed) {
     met: Boolean(row && row.met),
     note: row && typeof row.note === "string" ? row.note.trim() : "",
   }));
+  // Both of these are the model's voice, not its verdict, so they are read permissively: a
+  // missing `message` must never turn a usable verdict into a skip and hand the merge decision
+  // back to nobody. The gate's job is the verdict; the prose is how a colleague explains it.
+  const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
+  const first = typeof parsed.first === "string" ? parsed.first.trim() : "";
   const blocking = (Array.isArray(parsed.blocking) ? parsed.blocking : [])
     .filter((item) => typeof item === "string" && item.trim())
     .map((item) => item.trim());
@@ -227,7 +253,7 @@ function validateVerdict(parsed) {
   if (verdict === "rework" && blocking.length === 0) {
     throw new Error('verdict is "rework" but `blocking` is empty');
   }
-  return { verdict, rows, blocking };
+  return { verdict, rows, blocking, message, first };
 }
 
 // --- Reporting ------------------------------------------------------------------------------
@@ -246,6 +272,21 @@ function criteriaTable(rows, criteria) {
 // The criteria come from an issue body a user wrote, and the notes from a model reading it. A
 // stray pipe or newline would otherwise break the table apart.
 const escapeCell = (text) => String(text).replace(/\|/g, "\\|").replace(/\n+/g, " ");
+
+/** QC's own words, above the table. Absent when the model gave none — never a filler sentence. */
+const opening = (message) => (message ? `${message}\n\n` : "");
+
+/**
+ * Where TEC should start.
+ *
+ * A blocking list is a set, and a set has no order; TEC implements top to bottom and will
+ * cheerfully spend a round on the cosmetic one. QC picks the first item, and falls back to the
+ * literal first entry when the model did not — which is still an order, and an order is the point.
+ */
+function firstLine(review) {
+  const first = review.first || review.blocking[0];
+  return first ? `**از این‌جا شروع کن:** ${first}\n\n` : "";
+}
 
 function spendFooter(usage) {
   if (!usage) return "";
@@ -267,12 +308,19 @@ const SYSTEM = [
   "tokens and resources, files changed that the issue never mentioned, and dependencies added",
   "without reason.",
   "",
+  "You are the person who will have to answer for this merge. Two things follow from that, and",
+  "they pull in opposite directions on purpose: approve when the criteria are met even if you",
+  "would have written the code differently — taste is not a blocker and another round costs the",
+  "team a day — and reject only for something you can point at in the diff.",
+  "",
   "Answer with STRICT JSON and nothing else — no prose, no markdown fence:",
   "",
   "{",
   '  "verdict": "approve" | "rework",',
+  '  "message": "<two to four sentences, first person, Persian: what I checked, what convinced me, and what I am not sure about>",',
   '  "criteria": [ { "id": "<the number of the acceptance criterion>", "met": true|false, "note": "<one short line of evidence from the diff>" } ],',
-  '  "blocking": [ "<one concrete thing that must change before merge>" ]',
+  '  "blocking": [ "<one concrete thing that must change before merge>" ],',
+  '  "first": "<on a rework: which ONE blocking item to fix first, and why it comes first>"',
   "}",
   "",
   "Rules:",
@@ -286,6 +334,11 @@ const SYSTEM = [
   '- Choose "approve" when every criterion is met and nothing in `blocking` would be worth another',
   "  round. A small imperfection that no criterion asks about is not a blocker.",
   "- Notes and blocking entries in the SAME language as the issue (MIA issues are Persian).",
+  "- `message` is you speaking to a colleague who is about to act on this: say what you actually",
+  "  read (which files, which criterion), what decided it for you, and anything you could not",
+  "  verify from the diff. Do not restate the table in prose.",
+  "- `first` matters more than it looks: five objections in no order are five ways to spend the",
+  "  next round. Name the one that unblocks the others.",
   "- Be brief. This is a gate, not a code review essay.",
 ].join("\n");
 
@@ -390,13 +443,22 @@ async function main() {
     // would be a lie told to the next run.
     await unlabel(issueNumber, REWORK_LABEL);
     await commentOnPr(
-      `✅ **QC approves this pull request.**\n\n${table}\n\n` +
+      `✅ **QC approves this pull request.**\n\n` +
+        opening(review.message) +
+        `${table}\n\n` +
         (review.blocking.length
           ? `Not blocking, but worth an issue of its own:\n${review.blocking.map((b) => `- ${b}`).join("\n")}\n\n`
           : "") +
         "TEC may merge." +
-        spendFooter(answer.usage)
+        spendFooter(answer.usage),
+      { from: "qc", to: "tec", next: "merge کن", pr: prNumber, issue: issueNumber, sla: "60m" }
     );
+    await updateLedger({
+      repo,
+      issueNumber,
+      token: githubToken,
+      patch: { state: "qc-approved", owner: "tec", next: "merge", branchOrPr: `#${prNumber}` },
+    });
     console.log("QC approved.");
     return;
   }
@@ -414,9 +476,20 @@ async function main() {
 
   await label(prNumber, [REWORK_LABEL]);
   await commentOnPr(
-    `🛑 **QC asks for rework (${roundLabel}).**\n\n${table}\n\n` +
-      `**Blocking:**\n${blockingList}\n\nThis pull request will not be merged as it is.` +
-      spendFooter(answer.usage)
+    `🛑 **QC asks for rework (${roundLabel}).**\n\n` +
+      opening(review.message) +
+      `${table}\n\n` +
+      `**Blocking:**\n${blockingList}\n\n${firstLine(review)}` +
+      "این pull request به این شکل merge نمی‌شود." +
+      spendFooter(answer.usage),
+    {
+      from: "qc",
+      to: "tec",
+      next: `اول این را درست کن: ${review.first || review.blocking[0]}`,
+      pr: prNumber,
+      issue: issueNumber,
+      sla: "60m",
+    }
   );
 
   if (round > MAX_ROUNDS) {
@@ -430,14 +503,52 @@ async function main() {
     if (MAX_CYCLES > 0 && cycles >= MAX_CYCLES) {
       // Only reachable when the repo asked for a ceiling. The issue is PAUSED, not abandoned:
       // everything is still on the branch and the pull request is still open.
+      // AN OWNED PAUSE, NOT A DEAD END.
+      //
+      // The old text here said "sharpen the issue by hand, then comment `@tec`" — which asks a
+      // person to know the protocol, and leaves the issue stopped until they do. A pause has to
+      // carry four things instead: the decision only they can make, the options, what the team
+      // will do by itself if nobody answers, and by when. Any comment on the issue resumes it
+      // (see the `resume` job in ai-role-review.yml); the shepherd applies the default at the
+      // deadline. Nothing about it requires knowing how this machinery works.
+      const pauseTimeout = process.env.AGENT_PAUSE_TIMEOUT || "72h";
+      const question =
+        `دامنهٔ این کار را کم کنیم یا معیارهای پذیرش را عوض کنیم؟ (الف) همین ایراد را از دامنه ` +
+        `بیرون بگذاریم و بقیه را merge کنیم (ب) بریف را خودتان تیز کنید (ج) سقف ` +
+        `\`AGENT_MAX_CYCLES\` را بالا ببرید تا تیم باز هم تلاش کند`;
       await label(issueNumber, [HUMAN_LABEL]);
+      await unlabel(issueNumber, AGENT_LABEL);
       await commentOnIssue(
-        `⏸️ **Paused for a human.** The PO has already re-scoped this ${cycles} time(s) ` +
-          `(\`AGENT_MAX_CYCLES=${MAX_CYCLES}\`) and QC still will not pass it.\n\n` +
-          `Nothing has been thrown away — the work is on \`tec/issue-${issueNumber}\` and QC's ` +
-          `remaining objections are on #${prNumber}. Sharpen the issue by hand, then comment ` +
-          "`@tec` to queue it deliberately, or raise `AGENT_MAX_CYCLES` to let the loop continue."
+        `⏸️ **اینجا یک تصمیم با شماست.** بریف را ${cycles} بار بازتعریف کردیم ` +
+          `(\`AGENT_MAX_CYCLES=${MAX_CYCLES}\`) و باز هم از نظر من قابل merge نیست.\n\n` +
+          `هیچ چیزی دور ریخته نشده — کار روی \`tec/issue-${issueNumber}\` است و ایرادهای باقی‌مانده ` +
+          `روی #${prNumber}.\n\n**پرسش:** ${question}\n\n` +
+          `**اگر جوابی نیاید:** گزینهٔ الف — ایرادِ باقی‌مانده را به یک ایشوی جدا منتقل می‌کنیم و ` +
+          `بقیهٔ کار را merge می‌کنیم.\n\n` +
+          `تا \`${pauseTimeout}\` منتظر می‌مانم. یک کامنت ساده روی همین ایشو کافی است — لازم نیست ` +
+          "برچسبی را دست بزنید.",
+        {
+          from: "qc",
+          to: HUMAN,
+          next: question,
+          issue: issueNumber,
+          pr: prNumber,
+          sla: pauseTimeout,
+        }
       );
+      await updateLedger({
+        repo,
+        issueNumber,
+        token: githubToken,
+        patch: {
+          state: "needs-human",
+          owner: HUMAN,
+          next: "تصمیم دربارهٔ دامنهٔ کار",
+          reworkRound: `${round}`,
+          poCycles: cycles,
+          branchOrPr: `#${prNumber}`,
+        },
+      });
       console.log(`Cycle ceiling reached; issue #${issueNumber} paused for a human.`);
       return;
     }
@@ -446,7 +557,8 @@ async function main() {
     // issue under the rework marker exactly as a normal round would — po-rebrief.js reads them.
     await commentOnIssue(
       `${REWORK_MARKER}\n🛑 **QC rework round ${round}** — from the review of #${prNumber}:\n\n` +
-        `${blockingList}`
+        `${blockingList}`,
+      { from: "qc", to: "po", next: "بریف را از روی این ایرادها بازتعریف کن", issue: issueNumber, sla: "60m" }
     );
     await unlabel(issueNumber, REWORK_LABEL);
     await label(issueNumber, [PO_LABEL, AGENT_LABEL]);
@@ -455,8 +567,22 @@ async function main() {
         `current brief, so the brief itself is the problem, not the attempt.\n\n` +
         "The PO will re-scope this issue from QC's objections and the change TEC actually made, " +
         "and TEC will then continue on the same branch against the new brief. Nothing is being " +
-        "abandoned and no work is thrown away."
+        "abandoned and no work is thrown away.",
+      { from: "qc", to: "po", next: "ایشو را بازتعریف کن تا TEC دوباره شروع کند", issue: issueNumber, sla: "60m" }
     );
+    await updateLedger({
+      repo,
+      issueNumber,
+      token: githubToken,
+      patch: {
+        state: "needs-po",
+        owner: "po",
+        next: "بازتعریف بریف از روی ایرادهای QC",
+        reworkRound: `${round}`,
+        poCycles: cycles + 1,
+        branchOrPr: `#${prNumber}`,
+      },
+    });
     console.log(`QC rework cap reached; issue #${issueNumber} handed to the PO (cycle ${cycles + 1}).`);
     return;
   }
@@ -465,9 +591,30 @@ async function main() {
   // label that puts it back at the end of the queue.
   await commentOnIssue(
     `${REWORK_MARKER}\n🛑 **QC rework round ${round}/${MAX_ROUNDS}** — from the review of #${prNumber}:\n\n` +
-      `${blockingList}\n\nTEC will pick this up again with these notes in its prompt.`
+      `${blockingList}\n\nTEC will pick this up again with these notes in its prompt.`,
+    {
+      from: "qc",
+      to: "tec",
+      next: `اول این را درست کن: ${review.first || review.blocking[0]}`,
+      issue: issueNumber,
+      pr: prNumber,
+      sla: "60m",
+    }
   );
   await label(issueNumber, [REWORK_LABEL, AGENT_LABEL]);
+  await updateLedger({
+    repo,
+    issueNumber,
+    token: githubToken,
+    patch: {
+      state: "needs-rework",
+      owner: "tec",
+      next: review.blocking[0],
+      reworkRound: `${round}/${MAX_ROUNDS}`,
+      poCycles: cycles,
+      branchOrPr: `#${prNumber}`,
+    },
+  });
   console.log(`QC requested rework (round ${round}); issue #${issueNumber} re-queued.`);
 }
 

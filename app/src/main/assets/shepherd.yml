@@ -1,0 +1,75 @@
+# .github/workflows/shepherd.yml
+# Managed by MIA — kept byte-for-byte in sync with docs/github/.
+#
+# The shepherd: the guarantee that no issue is ever left without someone acting on it.
+#
+# Every other workflow here reacts to something happening. This one runs when NOTHING has
+# happened — which is the only failure mode that produces no error, no red run and no
+# notification, and therefore the only one that used to end a task quietly.
+#
+# It restores ownership; it never does the work. It opens no issues, closes none, merges nothing.
+# See the header of .github/scripts/shepherd.js for why that boundary is drawn so hard.
+name: Shepherd
+
+on:
+  schedule:
+    # Half past and on the hour, offset from the worker's own :00/:30 drain so a sweep does not
+    # race the queue it is about to inspect.
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: mia-shepherd
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  # It restarts stalled queues by dispatching the worker and the decomposer.
+  actions: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Look for work nobody is doing
+        env:
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # How long an owned pause waits for a person before its stated default is applied.
+          AGENT_PAUSE_TIMEOUT: ${{ vars.AGENT_PAUSE_TIMEOUT }}
+          # Set SHEPHERD_DRY_RUN=true as a repo variable to watch it decide without letting it act.
+          SHEPHERD_DRY_RUN: ${{ vars.SHEPHERD_DRY_RUN }}
+        run: |
+          if [ ! -f .github/scripts/shepherd.js ]; then
+            echo "::notice::This repo has no .github/scripts/shepherd.js — update the AI-team files from the MIA app."
+            exit 0
+          fi
+          node .github/scripts/shepherd.js
+
+      # The daily safety net for the top of the loop: a brief whose children all closed while
+      # something else was failing would otherwise stay open until a person noticed.
+      - name: Close any brief that is actually finished
+        env:
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SWEEP_ALL: 'true'
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ ! -f .github/scripts/brief-close.js ]; then
+            exit 0
+          fi
+          node .github/scripts/brief-close.js || true

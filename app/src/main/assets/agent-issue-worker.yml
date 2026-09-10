@@ -55,6 +55,10 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  # Triage may hand an oversized issue to the PO's splitter, which means dispatching another
+  # workflow. Without this the dispatch fails and triage degrades to a re-scope — correct, but
+  # slower than it needs to be.
+  actions: write
 
 jobs:
   # Decides what gets worked, and in what order. Nothing here touches the code.
@@ -148,6 +152,13 @@ jobs:
         issue: ${{ fromJson(needs.queue.outputs.issues) }}
     env:
       GH_TOKEN: ${{ github.token }}
+      # Every step in this job may need to speak on the issue, and speaking goes through
+      # `${RUNNER_TEMP}/say.sh` → `.github/scripts/say.js`, which reads these two. They are set
+      # here rather than step by step because the failure mode of forgetting one is invisible:
+      # the script cannot post, the run carries on, and a comment that should have named the next
+      # owner is simply never written.
+      REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ github.token }}
       # Which service serves TEC's model, and therefore which API key secret this run spends.
       # "openrouter" (free tier) or "minimax" (your own paid MiniMax account). Set it with an
       # AGENT_PROVIDER_TEC repo/environment variable (or the repo-wide AGENT_PROVIDER, which
@@ -278,11 +289,81 @@ jobs:
         if: steps.claim.outputs.skip != 'true'
         run: npm install -g opencode-ai
 
+      # ONE PLACE THIS WORKFLOW SPEAKS FROM.
+      #
+      # The node roles post through ai-provider.postComment, which refuses a message that does not
+      # name the next owner. A workflow posts with `gh issue comment`, which refuses nothing — and
+      # a dozen scattered calls is a dozen chances to strand an issue. So every comment below goes
+      # through this wrapper instead, and the wrapper's own fallback still writes the footer by
+      # hand when a repo was bootstrapped before say.js existed.
+      - name: Prepare the team voice helper
+        if: steps.claim.outputs.skip != 'true'
+        run: |
+          cat > "${RUNNER_TEMP}/say.sh" <<'SAY'
+          #!/usr/bin/env bash
+          # usage: say.sh --to <seat> --next "<what they do>" [--sla 30m] [--state <label>]
+          #               [--owner <seat>] [--pr <n>] [--branch <text>] (--body "…" | --body-file <path>)
+          set -o pipefail
+
+          if [ -f .github/scripts/say.js ]; then
+            if node .github/scripts/say.js "$@"; then
+              exit 0
+            fi
+            echo "::warning::say.js could not post — falling back to a hand-written footer."
+          fi
+
+          # Either this repo has no say.js (an older bootstrap), or it could not post. Both end
+          # here rather than in silence: the comment still gets a footer, because the shepherd
+          # reads that footer, and an issue it cannot see an owner for is one it has to guess
+          # about.
+          to=""; next=""; body=""; body_file=""; sla=""; pr=""
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              --to) to="$2"; shift 2 ;;
+              --next) next="$2"; shift 2 ;;
+              --body) body="$2"; shift 2 ;;
+              --body-file) body_file="$2"; shift 2 ;;
+              --sla) sla="$2"; shift 2 ;;
+              --pr) pr="$2"; shift 2 ;;
+              *) shift ;;
+            esac
+          done
+          [ -n "$body_file" ] && body="$(cat "$body_file")"
+          handle="@${to}"
+          [ "$to" = "human" ] && handle=""
+          {
+            printf '%s\n\n---\n\n' "$body"
+            if [ -n "$handle" ]; then
+              printf '**قدم بعدی:** %s — %s\n' "$handle" "$next"
+            else
+              printf '**قدم بعدی:** با شما — %s\n' "$next"
+            fi
+            printf '<!-- mia:handoff v=1 from=tec to=%s next="%s" issue=%s%s at=%s%s -->\n' \
+              "$to" "$next" "$ISSUE_NUMBER" \
+              "$( [ -n "$pr" ] && printf ' pr=%s' "$pr" )" \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              "$( [ -n "$sla" ] && printf ' sla=%s' "$sla" )"
+          } > "${RUNNER_TEMP}/say-body.md"
+          gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/say-body.md" || true
+          SAY
+          chmod +x "${RUNNER_TEMP}/say.sh"
+
+      # TEC introduces itself the way a colleague picking up a ticket would: what it is about to
+      # do, named from the issue itself. "TEC picked this up from the queue" described the
+      # machinery; nobody on a team talks about themselves in the third person.
       - name: Acknowledge the request
         if: steps.claim.outputs.skip != 'true'
         run: |
-          gh issue comment "$ISSUE_NUMBER" \
-            --body "🛠️ **TEC** picked this up from the queue — implementing the change and opening a pull request. Watch the [run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})." || true
+          TITLE="$(cat "${RUNNER_TEMP}/issue-title.txt")"
+          RUN_LINK="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          "${RUNNER_TEMP}/say.sh" \
+            --to qc \
+            --next "وقتی PR باز شد، بازبینی‌اش کن" \
+            --sla 90m \
+            --state agent-running \
+            --owner tec \
+            --branch "tec/issue-${ISSUE_NUMBER}" \
+            --body "🛠️ این را برداشتم: «${TITLE}». می‌روم سراغ پیاده‌سازی و بعد PR را باز می‌کنم — [جریان کار](${RUN_LINK})."
 
       # The prompt is the only lever that makes a weak, free model produce work worth merging.
       # It carries four things the issue text alone never does: how to work (orient → plan →
@@ -316,7 +397,8 @@ jobs:
           # An older bootstrap has the workflow but not this script. Say so once and carry on
           # with the brief as it stands — that is exactly the pre-re-scope behaviour.
           if [ ! -f .github/scripts/po-rebrief.js ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "🧭 This repo has no \`.github/scripts/po-rebrief.js\`, so the PO could not re-scope this issue. TEC will continue with the brief as it stands. Update the AI-team files from the MIA app to enable the QC → PO → TEC loop."
+            "${RUNNER_TEMP}/say.sh" --from po --to tec --next "با همین بریف ادامه بده" --sla 60m \
+              --body "🧭 این مخزن \`.github/scripts/po-rebrief.js\` را ندارد، پس نتوانستم بریف را بازتعریف کنم. کار متوقف نمی‌شود: با بریف فعلی ادامه می‌دهم. برای فعال شدن حلقهٔ QC → PO → TEC، فایل‌های تیم را از اپ MIA به‌روز کنید."
             gh issue edit "$ISSUE_NUMBER" --remove-label needs-po || true
             exit 0
           fi
@@ -406,6 +488,23 @@ jobs:
           - [ ] The project still builds with its own build command.
           - [ ] Nothing outside the scope of this issue was modified.
           - [ ] A reviewer would need no follow-up commit to ship it.
+
+          ## How you report
+          Your last action in this run is to write `.mia-report.md` in the repository root: a
+          short note in PERSIAN, for the colleague who reviews this next. The workflow reads that
+          file and removes it before committing, so it never appears in your diff — write it
+          freely, and write it as yourself, in the first person.
+
+          Four short parts, no headings, no preamble:
+          - What you changed, and why you chose that shape over the obvious alternative.
+          - What you deliberately did NOT do, and why (out of scope, no way to verify it here,
+            the issue did not ask for it).
+          - What you are unsure about — the thing QC should look at first.
+          - Anything you could not finish, stated plainly.
+
+          Never claim something works that you did not actually run or read back. "کامپایل شد ولی
+          روی دستگاه امتحان نشده" is a useful sentence; a confident one that turns out to be
+          wrong costs the team a review round and the next person's trust.
           HEADER
 
           # This repo's own conventions, when it carries any. AGENTS.md is the file MIA bootstraps
@@ -634,6 +733,15 @@ jobs:
           # look out of scope. (The land step drops it too, for repos where this gate is skipped.)
           rm -rf .opencode
 
+          # TEC's closing note is a message, not a change. Harvesting it here — at the first gate
+          # that runs after the agent, on every rung of the ladder — is what keeps it out of the
+          # diff, out of the allowlist check, and out of the "changed nothing" count, without any
+          # later step having to remember it exists.
+          if [ -f .mia-report.md ]; then
+            cp .mia-report.md "${RUNNER_TEMP}/tec-note.md" 2>/dev/null || true
+            rm -f .mia-report.md
+          fi
+
           # `-N` records untracked files as intent-to-add so `git diff` sees new files as well as
           # edits; `git reset` below takes the staging area back exactly as it was.
           git add -A -N >/dev/null 2>&1 || true
@@ -715,7 +823,10 @@ jobs:
                 printf '%s\n' "$changed"
                 printf '```\n\n</details>\n'
               } > "${RUNNER_TEMP}/scope-warning.md"
-              gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/scope-warning.md" || true
+              # A warning, not a change of turn: no --state, so the ledger keeps saying whose
+              # move it actually is.
+              "${RUNNER_TEMP}/say.sh" --to tec --next "همین کار را ادامه بده؛ این فقط یک هشدار است" \
+                --body-file "${RUNNER_TEMP}/scope-warning.md"
             fi
           fi
 
@@ -733,7 +844,7 @@ jobs:
           git clean -fdq 2>/dev/null || true
 
           {
-            printf '🚫 TEC changed files this issue does not cover, so **nothing was committed** and the working tree was reverted.\n\n'
+            printf '🚫 فایل‌هایی را دست زدم که این ایشو پوششان نمی‌دهد، پس **هیچ چیزی commit نشد** و درخت کار برگشت به حالت اول.\n\n'
             printf 'Out of scope:\n\n```\n'
             cat "$bad"
             printf '```\n\n'
@@ -744,9 +855,10 @@ jobs:
             else
               printf 'Files under `.github/` are never edited by the agent unless the issue body names such a path — the workflow that grades the change must not be rewritten by the change.\n\n'
             fi
-            printf 'Narrow the issue (or add the path to a "فایل‌های مجاز" section on purpose), then comment `@tec` again to re-queue it.\n'
+            printf 'دامنه را باید روشن‌تر کرد — این را خودم حدس نمی‌زنم، ولی روی زمین هم نمی‌ماند.\n'
           } > "${RUNNER_TEMP}/scope-rejection.md"
-          gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/scope-rejection.md" || true
+          "${RUNNER_TEMP}/say.sh" --from tec --to po --next "دامنهٔ ایشو را روشن کن یا فهرست «فایل‌های مجاز» را درست کن" --sla 60m \
+            --state needs-po --owner po --body-file "${RUNNER_TEMP}/scope-rejection.md"
           exit 1
           GUARD
           chmod +x "${RUNNER_TEMP}/scope-guard.sh"
@@ -1031,14 +1143,19 @@ jobs:
             echo "rungs=${total}"
           } >> "$GITHUB_OUTPUT"
 
+      # A missing key is the one failure nobody in this team can route around: no seat can spend
+      # a token, so the owner is genuinely a person. It is still an OWNED pause — it says which
+      # secret, where to put it, and that the issue resumes by itself once it is there.
       - name: Report missing model API key
         if: steps.ladder.outputs.status == 'nokey'
         run: |
           if [ "$AGENT_PROVIDER" = "minimax" ]; then
-            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: this repo is set to a MiniMax model but no `MINIMAX_API_KEY` Actions secret is set.\n\nAdd your MiniMax API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `MINIMAX_API_KEY`, then comment `@tec` again (or tap Re-do in the app) to put this issue back in the queue.'
+            BODY=$'🔑 نتوانستم شروع کنم: این مخزن روی مدل MiniMax تنظیم شده ولی سکرت `MINIMAX_API_KEY` ندارد.\n\nکلید MiniMax را در تنظیمات اپ MIA — یا در Settings → Secrets and variables → Actions — اضافه کنید. بعد از آن این ایشو دوباره در صف قرار می‌گیرد.'
           else
-            gh issue comment "$ISSUE_NUMBER" --body $'🔑 TEC could not run: no `OPENROUTER_API_KEY` (or `OPENROUTER_API_KEY_FALLBACK`) Actions secret is set.\n\nAdd a (free) OpenRouter API key in the MIA app Settings, or in the repository Settings → Secrets and variables → Actions as `OPENROUTER_API_KEY`, then comment `@tec` again (or tap Re-do in the app) to put this issue back in the queue.'
+            BODY=$'🔑 نتوانستم شروع کنم: هیچ سکرت `OPENROUTER_API_KEY` (یا `OPENROUTER_API_KEY_FALLBACK`) روی این مخزن نیست.\n\nیک کلید رایگان OpenRouter در تنظیمات اپ MIA — یا در Settings → Secrets and variables → Actions — اضافه کنید. بعد از آن این ایشو دوباره در صف قرار می‌گیرد.'
           fi
+          "${RUNNER_TEMP}/say.sh" --to human --next "کلید مدل را اضافه کنید؛ بقیه‌اش با من" --sla 24h \
+            --state needs-human --owner human --body "$BODY"
           exit 1
 
       # Free-tier rate/quota exhaustion is expected, not a bug: comment and pass green so the
@@ -1046,13 +1163,21 @@ jobs:
       - name: Report quota exhaustion
         if: steps.ladder.outputs.status == 'quota'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body $'⏳ TEC could not finish: the provider\'s quota/rate limit was hit (HTTP 429) — on the `OPENROUTER_API_KEY_FALLBACK` key too, if one is set.\n\nFree models are rate limited — `:free` ones at 50 requests/day (1000/day once you have $10+ of OpenRouter credit). Wait for the limit to reset, add an `OPENROUTER_API_KEY_FALLBACK` secret holding a second key, add OpenRouter credit, or switch this repo to MiniMax M3 on your own MiniMax account (`AGENT_PROVIDER=minimax`, `AGENT_MODEL=minimax/MiniMax-M3`, plus a `MINIMAX_API_KEY` secret — the MIA app\'s model picker sets all three). Then comment `@tec` again to re-queue it.'
+          # A quota wall is a WAIT, not a failure — so the issue goes back in the queue and the
+          # shepherd's next sweep picks it up once the limit has reset. Nobody has to remember it.
+          BODY=$'⏳ سقف نرخ/سهمیهٔ ارائه‌دهنده خورد (HTTP 429) — روی کلید `OPENROUTER_API_KEY_FALLBACK` هم، اگر تنظیم شده باشد. کار نیمه‌کاره روی زمین نمانده؛ همین که سقف باز شود دوباره سراغش می‌روم.\n\nمدل‌های رایگان سقف روزانه دارند (`:free` روزی ۵۰ درخواست، و با ۱۰ دلار اعتبار OpenRouter روزی ۱۰۰۰). می‌توانید صبر کنید، یک کلید دوم در `OPENROUTER_API_KEY_FALLBACK` بگذارید، اعتبار اضافه کنید، یا مخزن را روی حساب MiniMax خودتان ببرید (`AGENT_PROVIDER=minimax`، `AGENT_MODEL=minimax/MiniMax-M3` و سکرت `MINIMAX_API_KEY` — انتخابگر مدل در اپ MIA هر سه را می‌گذارد).'
+          "${RUNNER_TEMP}/say.sh" --to tec --next "بعد از باز شدن سقف، دوباره همین ایشو را بردار" --sla 24h \
+            --state by-agent --owner tec --body "$BODY"
+          gh issue edit "$ISSUE_NUMBER" --add-label by-agent || true
 
       - name: Report unexpected agent failure
         if: steps.ladder.outputs.status == 'error'
         run: |
-          gh issue comment "$ISSUE_NUMBER" \
-            --body "🛑 TEC hit an error before making usable changes. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+          # Deliberately does NOT name the next owner as a person: triage-failure.js (§۵.۹) runs
+          # from "Release the queue slot" below and decides between retry, narrow, re-scope and an
+          # owned pause. Saying "someone look at this" here would be a guess that pre-empts it.
+          "${RUNNER_TEMP}/say.sh" --to tec --next "علت را تریاژ کن و دوباره تلاش کن" --sla 60m \
+            --body "🛑 قبل از اینکه تغییر قابل‌استفاده‌ای بسازم به خطا خوردم. [گزارش اجرا](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) جزئیات را دارد."
           exit 1
 
       # The give-up path. The `agent-failed` label is not attached here: "Release the queue slot"
@@ -1068,15 +1193,16 @@ jobs:
           # Built as a file: the compiler output is arbitrary text and must never be interpolated
           # into a shell command line.
           {
-            printf '🛑 TEC produced changes but `./gradlew assembleDebug` still fails after %s build attempt(s), so nothing was merged.\n\n' "$ATTEMPTS"
+            printf '🛑 تغییرها را نوشتم ولی بعد از %s تلاشِ build هنوز `./gradlew assembleDebug` شکست می‌خورد، پس چیزی merge نشد.\n\n' "$ATTEMPTS"
             if [ "${RUNGS:-1}" -gt 1 ] 2>/dev/null; then
               printf 'Every model on `AGENT_MODEL_LADDER` (%s of them) was tried; each one reported its own spend above.\n\n' "$RUNGS"
             fi
             printf 'First lines of the compiler output:\n\n```\n'
             head -n 30 "${RUNNER_TEMP}/build-errors.txt" 2>/dev/null || true
-            printf '```\n\nSee the [workflow run](%s) for the whole log. Sharpen the issue and comment `@tec` again (or tap Re-do in the MIA app) to put it back in the queue.\n' "$RUN_URL"
+            printf '```\n\n[گزارش کامل اجرا](%s). این کار رها نمی‌شود — علتش تریاژ می‌شود و یا دوباره تلاش می‌کنم یا بریف بازتعریف می‌شود.\n' "$RUN_URL"
           } > "${RUNNER_TEMP}/build-failure.md"
-          gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/build-failure.md" || true
+          "${RUNNER_TEMP}/say.sh" --to tec --next "خطاهای کامپایلر را برطرف کن" --sla 60m \
+            --body-file "${RUNNER_TEMP}/build-failure.md"
 
       - name: Fail the job when the build gate failed
         if: steps.ladder.outputs.status == 'build_failed'
@@ -1086,13 +1212,16 @@ jobs:
         if: steps.ladder.outputs.status == 'scope'
         run: exit 1
 
-      # The agent ran, cost tokens and touched nothing. Left open rather than failed: the issue
-      # is usually too vague to act on, which is a rewrite, not a retry.
+      # The agent ran, cost tokens and touched nothing. That is almost always an issue too vague
+      # to act on — a rewrite, not a retry — so it goes to the PO rather than being "left open for
+      # a human to review", which was the polite way this repo used to drop a task.
       - name: Report a run that changed nothing
         if: steps.ladder.outputs.status == 'nochanges'
         run: |
-          gh issue comment "$ISSUE_NUMBER" \
-            --body "ℹ️ TEC ran but produced no file changes for this issue. Leaving it open for a human to review." || true
+          "${RUNNER_TEMP}/say.sh" --to po --next "بریف را طوری بازتعریف کن که بشود روی کد پیاده‌اش کرد" --sla 60m \
+            --state needs-po --owner po \
+            --body "ℹ️ اجرا شدم ولی هیچ فایلی تغییر نکرد. معمولاً یعنی از متن ایشو نمی‌شود فهمید دقیقاً چه چیزی باید ساخته شود — این را حدس نمی‌زنم."
+          gh issue edit "$ISSUE_NUMBER" --add-label needs-po --add-label by-agent || true
 
       - name: Open a PR, merge it, and report back
         id: land
@@ -1119,6 +1248,9 @@ jobs:
           # How many PO re-scopes one issue may have before it is paused for a human. Unset or 0
           # means the QC → PO → TEC loop never stops on its own, which is the default.
           AGENT_MAX_CYCLES: ${{ vars.AGENT_MAX_CYCLES }}
+          # How long an owned pause waits for a person before the shepherd applies the default
+          # answer the pause itself stated. Only read when a pause is actually written.
+          AGENT_PAUSE_TIMEOUT: ${{ vars.AGENT_PAUSE_TIMEOUT }}
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1129,6 +1261,12 @@ jobs:
         run: |
           # OpenCode keeps session state under $HOME, but drop any stray in-repo artifacts.
           rm -rf .opencode
+          # The scope guard normally harvests this; on a repo where that gate is skipped it would
+          # otherwise be committed, and TEC's note to its colleagues would become part of the app.
+          if [ -f .mia-report.md ]; then
+            [ -s "${RUNNER_TEMP}/tec-note.md" ] || cp .mia-report.md "${RUNNER_TEMP}/tec-note.md" 2>/dev/null || true
+            rm -f .mia-report.md
+          fi
           git config user.name "mia-agent[bot]"
           git config user.email "mia-agent[bot]@users.noreply.github.com"
 
@@ -1253,24 +1391,47 @@ jobs:
             sleep 5
           done
 
+          # TEC's own note goes ON TOP of every one of these outcomes, and the mechanical line
+          # underneath it. A colleague reads "here is what I did and what worries me" first, and
+          # the branch/PR bookkeeping second — which is the order a person would say it in.
+          NOTE="$(cat "${RUNNER_TEMP}/tec-note.md" 2>/dev/null || true)"
+          report="${RUNNER_TEMP}/tec-outcome.md"
+
           if [ -n "$merged" ]; then
             echo "merged=true" >> "$GITHUB_OUTPUT"
-            gh issue comment "$ISSUE_NUMBER" \
-              --body "✅ TEC implemented this and squash-merged ${PR_URL:-the pull request} into \`${DEFAULT_BRANCH}\`."
+            {
+              [ -n "$NOTE" ] && printf '%s\n\n---\n\n' "$NOTE"
+              printf '✅ پیاده‌سازی شد و %s با squash روی `%s` نشست.\n' "${PR_URL:-pull request}" "$DEFAULT_BRANCH"
+            } > "$report"
+            "${RUNNER_TEMP}/say.sh" --to done --next "این ایشو بسته می‌شود" \
+              --state done --owner done --branch "${PR_URL:-$BRANCH}" --body-file "$report"
           elif [ -n "$PR_URL" ]; then
-            gh issue comment "$ISSUE_NUMBER" \
-              --body "🔀 TEC opened ${PR_URL} but couldn't auto-merge it (branch protection or a merge conflict). Please review and merge it manually."
+            {
+              [ -n "$NOTE" ] && printf '%s\n\n---\n\n' "$NOTE"
+              printf '🔀 %s را باز کردم ولی نتوانستم merge کنم (branch protection یا تعارض merge). کد آماده است و روی شاخه می‌ماند.\n' "$PR_URL"
+            } > "$report"
+            "${RUNNER_TEMP}/say.sh" --to human --next "PR را نگاه کنید و دستی merge کنید" --sla 24h \
+              --state needs-human --owner human --branch "$PR_URL" --body-file "$report"
           else
-            NO_PR_BODY="$(printf '🛑 TEC prepared changes on branch `%s` but could not open a pull request.\n\nIf Actions is not allowed to open PRs here, enable **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests**, then comment `@tec` again.' "$BRANCH")"
-            gh issue comment "$ISSUE_NUMBER" --body "$NO_PR_BODY"
+            {
+              [ -n "$NOTE" ] && printf '%s\n\n---\n\n' "$NOTE"
+              printf '🛑 تغییرها روی شاخهٔ `%s` آماده است ولی نتوانستم pull request باز کنم.\n\n' "$BRANCH"
+              printf 'اگر Actions اجازهٔ باز کردن PR ندارد، از **Settings → Actions → General → Allow GitHub Actions to create and approve pull requests** روشنش کنید.\n'
+            } > "$report"
+            "${RUNNER_TEMP}/say.sh" --to human --next "اجازهٔ باز کردن PR را در تنظیمات مخزن بدهید تا خودم ادامه بدهم" --sla 24h \
+              --state needs-human --owner human --branch "$BRANCH" --body-file "$report"
           fi
 
       # Always releases the slot this issue holds, however the steps above ended — an issue left
       # wearing `agent-running` after the run is over would read as "still being worked" forever.
-      # It is deliberately NOT put back on `by-agent`: an automatic retry of a failing issue
-      # would spin the queue and burn the model quota. Re-queue it by hand ("@tec …", or Re-do
-      # in the MIA app), once you know why it stopped.
+      #
+      # `agent-failed` is still applied, because it is a true statement about this run. What has
+      # changed is what it MEANS: it is a record, not a wall. The triage step below reads it and
+      # decides the next move — retry, split, re-scope, or an owned pause — so nobody has to
+      # notice that this issue stopped. The old instruction here ("re-queue it by hand, once you
+      # know why it stopped") was the single most expensive sentence in this file.
       - name: Release the queue slot
+        id: release
         if: always() && steps.claim.outputs.skip != 'true'
         run: |
           # A change QC sent back is not a failed run: the issue already carries `needs-rework`
@@ -1282,4 +1443,49 @@ jobs:
             gh issue edit "$ISSUE_NUMBER" --remove-label agent-running --add-label done || true
           else
             gh issue edit "$ISSUE_NUMBER" --remove-label agent-running --add-label agent-failed || true
+            echo "triage=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # WHAT HAPPENS NEXT IS DECIDED HERE, NOT BY A PERSON NOTICING.
+      #
+      # `|| true` on purpose, twice over: triage-failure.js already fails into a re-scope on every
+      # internal error, and a run that has just failed must not fail a second time on the step
+      # whose entire job is to make sure the work continues.
+      - name: Decide what happens after a failed run
+        if: always() && steps.claim.outputs.skip != 'true' && steps.release.outputs.triage == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
+          # How many times one brief may be attempted before the PO must rewrite it.
+          AGENT_MAX_ATTEMPTS: ${{ vars.AGENT_MAX_ATTEMPTS }}
+          AGENT_PAUSE_TIMEOUT: ${{ vars.AGENT_PAUSE_TIMEOUT }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRIAGE_REASON: ${{ steps.ladder.outputs.status || 'unknown' }}
+          DEFAULT_BRANCH: ${{ env.DEFAULT_BRANCH }}
+        run: |
+          if [ ! -f .github/scripts/triage-failure.js ]; then
+            "${RUNNER_TEMP}/say.sh" --to human --next "این ایشو را دوباره در صف بگذارید" --sla 24h \
+              --body "🛑 این اجرا به نتیجه نرسید و این مخزن \`.github/scripts/triage-failure.js\` را ندارد، پس نتوانستم خودم تصمیم بعدی را بگیرم. فایل‌های تیم را از اپ MIA به‌روز کنید تا این حلقه خودکار شود."
+            exit 0
+          fi
+
+          # The evidence triage reasons from: the compiler errors when the build gate produced
+          # any, the agent's own log otherwise, and the diff of whatever did get written.
+          if [ -s "${RUNNER_TEMP}/build-errors.txt" ]; then
+            export LOG_TAIL_FILE="${RUNNER_TEMP}/build-errors.txt"
+          else
+            # The ladder writes one log per rung; the last one is the attempt that decided the
+            # run's outcome, and the only one worth spending prompt room on.
+            last_log="$(ls -t "${RUNNER_TEMP}"/opencode-rung-*.log 2>/dev/null | head -n 1)"
+            [ -n "$last_log" ] && export LOG_TAIL_FILE="$last_log"
+          fi
+          git diff "origin/${DEFAULT_BRANCH}...HEAD" > "${RUNNER_TEMP}/failed-attempt.diff" 2>/dev/null || true
+          [ -s "${RUNNER_TEMP}/failed-attempt.diff" ] && export DIFF_FILE="${RUNNER_TEMP}/failed-attempt.diff"
+
+          node .github/scripts/triage-failure.js || true
+        continue-on-error: true

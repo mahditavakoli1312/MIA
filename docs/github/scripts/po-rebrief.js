@@ -29,6 +29,8 @@ const {
   postComment: postIssueComment,
   missingKeyMessage,
 } = require("./ai-provider.js");
+const { HUMAN } = require("./agent-voice.js");
+const { updateLedger } = require("./ledger.js");
 
 const repo = process.env.REPO; // "owner/name"
 const githubToken = process.env.GITHUB_TOKEN;
@@ -48,6 +50,17 @@ const titleOutFile = process.env.REBRIEF_TITLE_FILE || "";
 const PO_LABEL = "needs-po";
 const REWORK_MARKER = "<!-- qc-rework -->";
 const REBRIEF_MARKER = "<!-- po-rebrief -->";
+/**
+ * Triage's notes (see triage-failure.js).
+ *
+ * Read here for the same reason QC's are: they are the team saying, on the record, what is wrong
+ * with the current attempt. Without this, an issue re-scoped after a BUILD failure — where QC
+ * never got to object, because there was never a pull request — would arrive with nothing to
+ * design around and this script would give up on it, which is how a failing issue used to go
+ * round the loop unchanged. They are counted separately from QC's rounds; only qc-review.js
+ * counts REWORK_MARKER, and it is untouched.
+ */
+const FAILURE_MARKER = "<!-- mia:failed -->";
 
 const DIFF_LIMIT = 20000;
 
@@ -55,8 +68,8 @@ const DIFF_LIMIT = 20000;
 // there: turning a request into something TEC can implement on the first attempt.
 const ai = resolveProvider(process.env, "po");
 
-const post = (body) =>
-  postIssueComment({ repo, issueNumber, token: githubToken, body });
+const post = (body, handoff) =>
+  postIssueComment({ repo, issueNumber, token: githubToken, body, handoff });
 
 // --- GitHub ---------------------------------------------------------------------------------
 
@@ -91,11 +104,24 @@ const unlabel = (name) =>
  */
 async function giveUp(reason) {
   await unlabel(PO_LABEL);
+  await updateLedger({
+    repo,
+    issueNumber,
+    token: githubToken,
+    patch: { state: "by-agent", owner: "tec", next: "ادامه با بریف فعلی و یادداشت‌های QC" },
+  });
   await post(
     `🧭 **The PO could not re-scope this issue.** ${reason}\n\n` +
       "TEC will continue with the brief as it stands and QC's notes in its prompt — nothing is " +
       "blocked and nothing was thrown away." +
-      (runUrl ? `\n\n<sub><a href="${runUrl}">run log</a></sub>` : "")
+      (runUrl ? `\n\n<sub><a href="${runUrl}">run log</a></sub>` : ""),
+    {
+      from: "po",
+      to: "tec",
+      next: "با همین بریف و یادداشت‌های QC ادامه بده",
+      issue: issueNumber,
+      sla: "60m",
+    }
   );
   process.exit(0);
 }
@@ -125,9 +151,14 @@ const SYSTEM = [
   "  unless QC objected to it.",
   "- Write in the same language as the current issue body (this project is Persian-first).",
   "",
+  "You are taking responsibility for a brief that has now failed twice. Say what was actually",
+  "unclear — not \"it was underspecified\", but WHICH sentence, and what two different implementers",
+  "would each have read it to mean. That is the sentence you then have to fix.",
+  "",
   "Answer with STRICT JSON and nothing else — no prose, no code fence:",
   "{",
   '  "title": "<the issue title, unchanged unless it is actively misleading>",',
+  '  "message": "<two to four sentences, first person, Persian: which sentence was ambiguous, how it could be read two ways, and what I changed so it can only be read one way>",',
   '  "body": "<the full rewritten issue body, markdown>",',
   '  "changed": ["<one line per thing you made concrete, and why QC objected to it>"]',
   "}",
@@ -152,10 +183,14 @@ function validate(parsed) {
     throw new Error("the rewritten body has no acceptance-criteria checklist");
   }
   const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : null;
+  // The PO's own explanation. Permissive on purpose, exactly like QC's: a re-scope that is
+  // otherwise perfectly usable must not be thrown away because the model skipped the prose, or
+  // the issue would go back to TEC with the same brief that already failed twice.
+  const message = typeof parsed.message === "string" ? parsed.message.trim() : "";
   const changed = Array.isArray(parsed.changed)
     ? parsed.changed.filter((c) => typeof c === "string" && c.trim())
     : [];
-  return { title, body, changed };
+  return { title, body, changed, message };
 }
 
 const spendFooter = (usage) => {
@@ -180,7 +215,9 @@ async function main() {
   // brief that no longer exists, and feeding them back would ask the PO to design around
   // complaints that have already been answered.
   const lastRebrief = bodies.map((b) => b.includes(REBRIEF_MARKER)).lastIndexOf(true);
-  const objections = bodies.slice(lastRebrief + 1).filter((b) => b.includes(REWORK_MARKER));
+  const objections = bodies
+    .slice(lastRebrief + 1)
+    .filter((b) => b.includes(REWORK_MARKER) || b.includes(FAILURE_MARKER));
   if (objections.length === 0) {
     await giveUp("QC left no objections on this issue, so there is nothing to re-scope around.");
   }
@@ -201,9 +238,9 @@ async function main() {
     issue.body || "(empty)",
     "===== END CURRENT ISSUE BODY =====",
     "",
-    "===== BEGIN QC OBJECTIONS (this cycle) =====",
+    "===== BEGIN OBJECTIONS FROM THE TEAM (this cycle) =====",
     objections.join("\n\n---\n\n"),
-    "===== END QC OBJECTIONS =====",
+    "===== END OBJECTIONS =====",
     "",
     diff
       ? "===== BEGIN THE DIFF TEC PRODUCED =====\n" + diff + "\n===== END DIFF ====="
@@ -238,6 +275,7 @@ async function main() {
     `${REBRIEF_MARKER}\n🧭 **The PO re-scoped this issue.** QC rejected the previous attempt ` +
       `${objections.length} time(s), so the brief has been rewritten to make those points ` +
       `checkable. TEC continues on the same branch against the new brief.\n\n` +
+      (rebrief.message ? `${rebrief.message}\n\n` : "") +
       (rebrief.changed.length
         ? `**What changed:**\n${rebrief.changed.map((c) => `- ${c}`).join("\n")}\n\n`
         : "") +
@@ -245,7 +283,14 @@ async function main() {
       "````markdown\n" +
       (issue.body || "(empty)") +
       "\n````\n\n</details>" +
-      spendFooter(answer.usage)
+      spendFooter(answer.usage),
+    {
+      from: "po",
+      to: "tec",
+      next: "بریف تازه را روی همان شاخه پیاده کن",
+      issue: issueNumber,
+      sla: "60m",
+    }
   );
 
   await gh(`/issues/${issueNumber}`, {
@@ -267,6 +312,17 @@ async function main() {
   };
   handBack(bodyOutFile, rebrief.body, "body");
   handBack(titleOutFile, rebrief.title || issue.title, "title");
+  await updateLedger({
+    repo,
+    issueNumber,
+    token: githubToken,
+    patch: {
+      state: "by-agent",
+      owner: "tec",
+      next: "پیاده‌سازی بریف تازه روی همان شاخه",
+      poCycles: objections.length,
+    },
+  });
   console.log(`PO re-scoped issue #${issueNumber}.`);
 }
 

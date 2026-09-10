@@ -16,6 +16,8 @@
 // Nothing here reads the environment at import time — `resolveProvider(env)` does, so a caller
 // can be tested with a fake environment.
 
+const { charter, handoff: renderHandoff } = require("./agent-voice.js");
+
 /** Everything that differs between the services an AGENT_MODEL can live on. */
 const PROVIDERS = {
   openrouter: {
@@ -95,7 +97,15 @@ const isOutOfQuota = (status) => status === 429 || status === 402;
  * A thrown error carries `.quota = true` when every key was rate limited, so a caller can tell
  * "wait for the reset" apart from "this is broken" — the two need different advice on the issue.
  */
-async function askAI(ai, { system, user }) {
+async function askAI(ai, { system, user, role }) {
+  // The team charter goes in front of every job-specific prompt, for every role, here rather
+  // than at the four call sites: this is the only line all of them pass through, so it is the
+  // only place where "all four seats sound like the same team" can be true by construction.
+  // The role comes from the resolved provider, which already knows which seat it is buying
+  // tokens for; passing `role: null` explicitly is the opt-out, and nothing but a test uses it.
+  const seatRole = role === undefined ? ai.role : role;
+  const systemPrompt = seatRole ? `${charter(seatRole)}\n\n---\n\n${system}` : system;
+
   let lastError;
   for (const key of ai.keys) {
     const res = await fetch(ai.url, {
@@ -112,7 +122,7 @@ async function askAI(ai, { system, user }) {
         // is ~95% of it — so a cap would leave the answer almost nothing to be written in.
         // Brevity is asked for in the prompts instead.
         messages: [
-          { role: "system", content: system },
+          { role: "system", content: systemPrompt },
           { role: "user", content: user },
         ],
       }),
@@ -148,8 +158,35 @@ function usageTotal(usage) {
   return usage.total_tokens ?? (usage.prompt_tokens || 0) + (usage.completion_tokens || 0);
 }
 
-/** Post text as a comment on one issue or PR. */
-async function postComment({ repo, issueNumber, token, body }) {
+/**
+ * Post text as a comment on one issue or PR, with the handoff footer appended.
+ *
+ * `handoff` is REQUIRED, and that is the entire design. Every role posts through this function,
+ * so making the argument mandatory is what turns "always say who acts next" from a line in a
+ * prompt — which a model may or may not honour — into something the code cannot skip. A role
+ * that forgets it crashes its own run loudly, which is a bad afternoon; a role that silently
+ * posts an ownerless comment strands an issue nobody ever looks at again, which is the failure
+ * this whole system exists to prevent.
+ *
+ * Accepts the object form (see agent-voice.handoff) or an already-rendered block, so a caller
+ * that has to build the footer early — to put it in a `details` block, say — can pass it on.
+ */
+async function postComment({ repo, issueNumber, token, body, handoff }) {
+  if (!handoff) {
+    throw new Error(
+      `postComment on #${issueNumber} was called without a handoff. Every comment must name who ` +
+        "acts next — pass { to, next } (see agent-voice.handoff)."
+    );
+  }
+  const footer =
+    typeof handoff === "string"
+      ? handoff.includes("mia:handoff")
+        ? handoff
+        : (() => {
+            throw new Error("A string handoff must be a rendered `mia:handoff` block.");
+          })()
+      : renderHandoff({ issue: issueNumber, ...handoff });
+
   const res = await fetch(
     `https://api.github.com/repos/${repo}/issues/${issueNumber}/comments`,
     {
@@ -158,7 +195,7 @@ async function postComment({ repo, issueNumber, token, body }) {
         authorization: `Bearer ${token}`,
         accept: "application/vnd.github+json",
       },
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body: `${body}${footer}` }),
     }
   );
   if (!res.ok) console.error(`Could not post a comment: HTTP ${res.status}`);

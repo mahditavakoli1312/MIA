@@ -25,6 +25,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The agent team's own health check, run against the copy this repo actually has.
+      #
+      # A generated repo's `.github/scripts/` can be edited by hand — and the one thing that must
+      # survive any edit is that every state an issue can be in has an owner and a way out. A
+      # broken table here produces no failure at runtime: issues simply stop moving, which looks
+      # exactly like nobody having filed any.
+      - name: Check the agent state table
+        if: ${{ hashFiles('.github/scripts/agent-voice.js') != '' }}
+        run: |
+          node -e '
+            const { STATES, STATE_PRIORITY } = require("./.github/scripts/agent-voice.js");
+            let bad = 0;
+            for (const [name, spec] of Object.entries(STATES)) {
+              if (!spec.owner) { console.error(`✗ state "${name}" has no owner`); bad++; }
+              if (!spec.terminal && !(spec.exits || []).length) {
+                console.error(`✗ state "${name}" has no exit — a task in it would never move again`);
+                bad++;
+              }
+              if (!STATE_PRIORITY.includes(name)) {
+                console.error(`✗ state "${name}" is missing from STATE_PRIORITY`);
+                bad++;
+              }
+            }
+            if (bad) process.exit(1);
+            console.log(`✓ ${Object.keys(STATES).length} states, each with an owner and a way out.`);
+          '
+
       - name: Set up JDK 17
         if: ${{ hashFiles('gradlew') != '' }}
         uses: actions/setup-java@v4

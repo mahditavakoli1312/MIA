@@ -12,6 +12,10 @@
 #                  the prompt; after two such rounds the verdict becomes `needs-po` instead.
 #   qc-skipped   → QC could not review (no key, quota, unusable answer). TEC merges anyway.
 #   needs-human  → only when a repo set an `AGENT_MAX_CYCLES` ceiling and the loop reached it.
+#                  It is an OWNED pause, not a stop: the comment carries the decision, the
+#                  options, the answer the team proceeds on by itself, and a deadline. Any human
+#                  comment resumes it (see ai-role-review.yml), and the shepherd applies the
+#                  stated default when the deadline passes.
 #                  The issue is PAUSED — branch and pull request intact — never abandoned.
 #
 # The gate deliberately fails OPEN. A free model that is rate limited must not be able to block
@@ -57,7 +61,7 @@ jobs:
           create qc-skipped bfd4f2 "QC could not review — merging is not blocked"
           create needs-rework d93f0b "QC asked for changes before this can be merged"
           create needs-po 5319e7 "QC rejected it twice — the PO is re-scoping the brief"
-          create needs-human b60205 "Paused for a human — the AGENT_MAX_CYCLES ceiling was reached"
+          create needs-human b60205 "Waiting on one decision from a person — resumes on any comment"
 
       # AGENTS.md and the acceptance criteria are the standard QC judges against, so the review
       # needs the repo, not just the diff.
@@ -98,6 +102,7 @@ jobs:
           # How many PO re-scopes one issue may have before it is paused for a human. Unset or 0
           # means the QC → PO → TEC loop never stops on its own, which is the default.
           AGENT_MAX_CYCLES: ${{ vars.AGENT_MAX_CYCLES }}
+          AGENT_PAUSE_TIMEOUT: ${{ vars.AGENT_PAUSE_TIMEOUT }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff

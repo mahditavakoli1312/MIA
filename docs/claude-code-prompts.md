@@ -34,6 +34,7 @@ House rules for this repo:
 - [موج ۳ — خط تولید PO/QC](#موج-۳--خط-تولید-poqc)
 - [موج ۴ — دیده‌شدن و UI/UX](#موج-۴--دیدهشدن-و-uiux)
 - [قالب ساخت پرامپت جدید](#قالب-ساخت-پرامپت-جدید)
+- [موج ۵ — تیمِ انسانی و حلقهٔ بی‌وقفه](agent-humanity-prompts.md) ← سند جدا
 
 ---
 
@@ -774,7 +775,8 @@ Done when: <the observable end state>
 
 <div align="center">
 
-[نقشهٔ راه](roadmap.md) · [مستندات سیستم](README.md) · [تیم ایجنت](github/README.md)
+[نقشهٔ راه](roadmap.md) · [مستندات سیستم](README.md) · [تیم ایجنت](github/README.md) ·
+[موج ۵ — تیم انسانی](agent-humanity-prompts.md)
 
 </div>
 
