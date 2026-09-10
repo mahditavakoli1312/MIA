@@ -74,8 +74,17 @@ first few files exist, that layout is the one.
 7. **Test the logic you add.** Every new function with a branch in it gets a test next to the
    existing ones. If there is no test setup yet, adding one is part of the first issue that needs
    it.
-8. **The README stays true.** If your change alters how this is installed, configured or run, the
-   README changes in the same pull request.
+8. **The README says how to run this, and it stays true.** `README.md` carries an **`## اجرا`
+   ("How to run")** section: the exact commands, in order, that take someone from a fresh clone to
+   the thing running — what to install first, what to run, and what they should see. Real
+   copy-pasteable commands, never a placeholder. If that section is missing, add it in the pull
+   request you are working on now, even if the issue did not ask. If your change alters how this
+   is installed, configured or run — a new script, a renamed entry point, a new required
+   environment variable, a changed port, a new install step — that section changes **in the same
+   pull request**. A change that breaks the documented way to run the project is unfinished, not
+   "documented later". `README.md` is always in scope for this, even when the issue lists the
+   files you may touch and the README is not one of them. If nothing about running it changed,
+   leave the README alone.
 9. **Comments explain WHY, not what.** Match the density and voice of the file you are editing.
 
 ## If this project grows a user interface

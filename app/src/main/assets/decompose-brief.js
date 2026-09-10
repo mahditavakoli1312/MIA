@@ -25,6 +25,7 @@ const {
   fmt,
   usageTotal,
   postComment: postIssueComment,
+  startTecQueue,
   missingKeyMessage,
 } = require("./ai-provider.js");
 const { HUMAN } = require("./agent-voice.js");
@@ -47,6 +48,23 @@ const runUrl = process.env.RUN_URL || "";
 const splitIssueNumber = (process.env.SPLIT_ISSUE || "").trim();
 
 const AGENT_LABEL = "by-agent";
+/**
+ * The input label. It is the TRIGGER, not a state the issue keeps — and forgetting that is what
+ * made a planned brief loop forever.
+ *
+ * `brief` outranks `brief-planned` in the state table (agent-voice.js STATE_PRIORITY), because
+ * an issue wearing both is an issue whose decomposition has not finished yet. So a brief that is
+ * decomposed and still wearing `brief` reads to the shepherd as "a brief nobody has decomposed",
+ * every thirty minutes, forever: it re-dispatches this workflow, the run stops on `brief-planned`
+ * and changes nothing, the state is still `brief` at the next sweep — and after three sweeps the
+ * shepherd gives up and marks a brief that was planned correctly as `agent-failed`.
+ *
+ * Every exit below therefore takes this label off. Success removes it because the brief is now
+ * `brief-planned`; failure removes it because the brief is now `brief-failed`, whose own way back
+ * is a person RE-ADDING `brief` — which is an event, and only an event that is not already there
+ * can fire one.
+ */
+const BRIEF_LABEL = "brief";
 const PLANNED_LABEL = "brief-planned";
 const FAILED_LABEL = "brief-failed";
 const BLOCKED_LABEL = "blocked";
@@ -295,6 +313,10 @@ function planHandoff(created, queued, number = briefNumber) {
 
 async function fail(reason, usage, number = briefNumber) {
   await addLabels([FAILED_LABEL], number);
+  // `brief-failed` is only a state anybody watches while `brief` is gone — see BRIEF_LABEL. And
+  // re-adding `brief` is exactly what the message below asks a person to do, which is not an
+  // event GitHub can deliver for a label that never came off.
+  await removeLabel(BRIEF_LABEL, number);
   await post(
     `🧭 **PO could not decompose this brief.**\n\n${reason}\n\n` +
       "The brief is left open and unchanged — nothing was created. Fix what the message above " +
@@ -445,6 +467,10 @@ async function decomposeSource({ number, title, body, depth, isBrief }) {
   const source = await gh(`/issues/${number}`);
   const existing = (source.labels || []).map((l) => (typeof l === "string" ? l : l.name));
   if (existing.includes(PLANNED_LABEL)) {
+    // Repairs a brief already caught in the loop this label caused: the plan is there, so the
+    // trigger labels come off and the state finally settles on `brief-planned`.
+    await removeLabel(BRIEF_LABEL, number);
+    await removeLabel(FAILED_LABEL, number);
     await post(
       `ℹ️ این ایشو قبلاً تجزیه شده (\`${PLANNED_LABEL}\`). چیزی دوباره ساخته نشد — نقشه در چک‌لیست بالاست.`,
       {
@@ -613,6 +639,11 @@ async function decomposeSource({ number, title, body, depth, isBrief }) {
   const handoff = planHandoff(created, queued, number);
   await post(lines.join("\n") + spendFooter(answer.usage), handoff, number);
   await addLabels([PLANNED_LABEL], number);
+  // The plan exists, so this is no longer an undecomposed brief and no longer a failed one. A
+  // `brief` left here is the shepherd's forever-loop (see BRIEF_LABEL); a `brief-failed` left
+  // over from an earlier attempt is a status table that contradicts the plan underneath it.
+  await removeLabel(BRIEF_LABEL, number);
+  await removeLabel(FAILED_LABEL, number);
   await updateLedger({
     repo,
     issueNumber: number,
@@ -625,6 +656,13 @@ async function decomposeSource({ number, title, body, depth, isBrief }) {
     },
   });
   console.log(`Opened ${created.length} issue(s) from #${number}; queued ${queued.length}.`);
+
+  // AND THE FIRST ONE STARTS NOW. The children were labelled `by-agent` with GITHUB_TOKEN, which
+  // fires no workflow, so without this the plan that was just announced — "@tec — از #2 شروع کن"
+  // — would sit still until the worker's half-hourly timer came round. A brief that is planned
+  // correctly and then does nothing for half an hour is indistinguishable, to the person who
+  // filed it, from a team that never turned up.
+  if (queued.length > 0) await startTecQueue({ repo, token: githubToken });
 
   // A source that was itself an issue is finished the moment its children exist: leaving it open
   // would make the plan's checklist unsatisfiable, because the parent can only close when the
@@ -699,13 +737,18 @@ async function main() {
     console.error("BRIEF_NUMBER (or SPLIT_ISSUE) is required.");
     process.exit(1);
   }
-  await decomposeSource({
-    number: Number(briefNumber),
-    title: briefTitle,
-    body: briefBody,
-    depth: 0,
-    isBrief: true,
-  });
+  // On an `issues` event the title and body arrive as env vars. On a workflow_dispatch — which
+  // is how the shepherd re-triggers a brief that stalled — there is no event payload to read
+  // them from, so they are fetched. Without this the model would be asked to decompose an empty
+  // brief and would fail, which is the opposite of what a rescue dispatch is for.
+  let title = briefTitle;
+  let body = briefBody;
+  if (!title.trim()) {
+    const source = await gh(`/issues/${briefNumber}`);
+    title = source.title || "";
+    body = source.body || "";
+  }
+  await decomposeSource({ number: Number(briefNumber), title, body, depth: 0, isBrief: true });
 }
 
 main().catch(async (err) => {

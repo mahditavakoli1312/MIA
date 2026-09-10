@@ -123,6 +123,45 @@ jobs:
           } >&2
           exit 1
 
+      # The README's "how to run" section, checked rather than hoped for.
+      #
+      # It is the first thing anyone needs from a repository and the first thing to go stale, and
+      # a wrong run command does not read as out-of-date documentation — it reads as a broken
+      # project. TEC is told to keep this section true in the same pull request as any change that
+      # alters how the project runs (see AGENTS.md), so this step is the visible reminder that
+      # nobody has done it yet.
+      #
+      # A WARNING, not an error, and deliberately so. A freshly created MIA repo is a bare
+      # auto-generated README with no project in it yet — failing that would mean every new repo
+      # starts red, before there is anything to run or anyone to blame. The real gates are TEC's
+      # own definition of done and QC, which can see the diff and tell whether the run method
+      # actually changed. This one only has to be impossible to miss.
+      - name: Check the README says how to run this
+        run: |
+          if [ ! -f README.md ]; then
+            echo "::warning::This repo has no README.md, so there is nowhere that says how to run it."
+            exit 0
+          fi
+
+          # Any heading a person would plausibly put the run instructions under, in either
+          # language. Being generous here is the point: the check exists to catch "nobody wrote
+          # it", not to make projects rename a section that already does the job.
+          heading='^#{1,6}[[:space:]]*.*(اجرا|راه.?اندازی|نصب|شروع|how to run|running|run locally|getting started|quick ?start|usage|installation|setup|development)'
+          if ! grep -qiE "$heading" README.md; then
+            echo "::warning file=README.md::README.md has no section saying how to run this project. Add an \"## اجرا\" section with the exact commands that take someone from a fresh clone to the thing running."
+            exit 0
+          fi
+
+          # A heading with nothing runnable under it is the same problem wearing a title. Every
+          # real answer to "how do I run this" contains a command, and in a README a command is
+          # in a code fence.
+          if ! grep -q '```' README.md; then
+            echo "::warning file=README.md::README.md has a run section but no commands in it. Put the actual commands in a code fence, so they can be copied and pasted."
+            exit 0
+          fi
+
+          echo "✓ README.md says how to run this project."
+
       - name: Assemble (debug)
         run: |
           if [ -f ./gradlew ]; then

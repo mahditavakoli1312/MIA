@@ -28,6 +28,9 @@ concurrency:
 permissions:
   contents: read
   issues: write
+  # A released dependent is queued with GITHUB_TOKEN, which fires no workflow — so this sweep
+  # dispatches the drain itself. Without it the issue it just freed waits for the timer.
+  actions: write
 
 jobs:
   unblock:

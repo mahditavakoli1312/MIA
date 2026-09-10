@@ -19,7 +19,10 @@
 #   5. every give-up path (QC's skip, the PO's giveUp, triage's four moves, the brief audit,
 #      the unblock sweep) hands the work to somebody;
 #   6. the shepherd cannot open, close or merge anything, and a brief is only ever closed after
-#      an explicit yes.
+#      an explicit yes;
+#   7. every workflow file still PARSES — a heredoc body at column 0 ends the enclosing `run: |`
+#      block scalar, and GitHub responds to an unparseable workflow by ignoring it in complete
+#      silence: no run, no error, every trigger dead. See scripts/tests/workflows.test.js.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -48,4 +51,5 @@ if ! node --test "${tests[@]}"; then
   exit 1
 fi
 
-echo "✓ Every state has an owner and an exit, and no role can speak without naming the next one."
+echo "✓ Every state has an owner and an exit, no role can speak without naming the next one,"
+echo "  and every workflow file still parses."

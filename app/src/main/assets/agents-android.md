@@ -39,6 +39,7 @@ app/src/main/java/<package>/
 └── security/, text/, voice/     ← small single-purpose helpers
 app/src/main/res/values/strings.xml   ← every user-visible string
 app/src/test/java/<package>/…         ← unit tests, mirroring the main source tree
+README.md                             ← what this is, and how to build and run it
 ```
 
 New file goes in the folder its neighbours are already in. Do not invent a layout.
@@ -72,7 +73,19 @@ New file goes in the folder its neighbours are already in. Do not invent a layou
    there. A small diff that builds beats a large one that does not.
 9. **Test the logic you add.** New repository or parsing code gets a host unit test next to the
    existing ones. UI-only changes do not need one.
-10. **Comments explain WHY, not what.** Match the density and voice of the file you are editing.
+10. **The README says how to run this, and it stays true.** `README.md` carries an **`## اجرا`
+    ("How to run")** section: the exact commands that take someone from a fresh clone to the app
+    on a device or emulator — `./gradlew assembleDebug`, how to install the APK, any
+    `local.properties` key or Actions secret the build needs, and which JDK. Real copy-pasteable
+    commands, never a placeholder. If that section is missing, add it in the pull request you are
+    working on now, even if the issue did not ask. If your change alters how the project is built,
+    configured or run — a new Gradle task, a new `local.properties` key, a new permission that has
+    to be granted by hand, a changed `minSdk`, a new signing step — that section changes **in the
+    same pull request**. A change that breaks the documented way to run the app is unfinished, not
+    "documented later". `README.md` is always in scope for this, even when the issue lists the
+    files you may touch and the README is not one of them. If nothing about running it changed,
+    leave the README alone.
+11. **Comments explain WHY, not what.** Match the density and voice of the file you are editing.
 
 ## How to add a new screen
 

@@ -6,21 +6,22 @@
 # issue's acceptance criteria, and leaves its verdict as a label the TEC workflow is waiting for:
 #
 #   qc-approved  → TEC merges, exactly as it did before this workflow existed.
-#   needs-po     → two rework rounds were not enough, so the PO re-scopes the brief and the loop
-#                  continues (the work is never abandoned) — see po-rebrief.js.
-#   needs-rework → TEC does not merge. The issue is re-queued with QC's blocking list appended to
-#                  the prompt; after two such rounds the verdict becomes `needs-po` instead.
 #   qc-skipped   → QC could not review (no key, quota, unusable answer). TEC merges anyway.
-#   needs-human  → only when a repo set an `AGENT_MAX_CYCLES` ceiling and the loop reached it.
-#                  It is an OWNED pause, not a stop: the comment carries the decision, the
-#                  options, the answer the team proceeds on by itself, and a deadline. Any human
-#                  comment resumes it (see ai-role-review.yml), and the shepherd applies the
-#                  stated default when the deadline passes.
-#                  The issue is PAUSED — branch and pull request intact — never abandoned.
 #
-# The gate deliberately fails OPEN. A free model that is rate limited must not be able to block
-# every merge in a repository, so the only outcome that stops a merge is a model that actually
-# said "rework" — see .github/scripts/qc-review.js.
+# THERE IS NO THIRD OUTCOME. QC does not stop a merge and does not send an issue back.
+#
+# It used to: `needs-rework` held the pull request open and re-queued the same issue, twice, and
+# then `needs-po` had the PO rewrite the brief, and past `AGENT_MAX_CYCLES` the whole thing
+# stopped for a human. Because only one `tec/issue-*` branch may be in flight at a time, every
+# one of those states froze the ENTIRE queue behind one contested diff — which is how a planned
+# brief ends the day with nothing merged.
+#
+# What QC objects to is now opened as a NEW issue carrying `by-agent`. The queue is ordered
+# oldest-first, so that issue is worked after everything already planned: the brief ships in the
+# order the PO planned it, and QC's improvements follow it. Nothing is dropped, nothing is
+# blocked, and the follow-up issue is the record of what the merge left undone.
+#
+# See .github/scripts/qc-review.js.
 name: QC Review (PR gate)
 
 on:
@@ -52,6 +53,12 @@ jobs:
       HEAD_REF: ${{ github.event.pull_request.head.ref }}
     steps:
       # The verdict labels have to exist before anything can attach one.
+      #
+      # The last three are no longer QC's. It only ever applies qc-approved or qc-skipped now.
+      # They are created here because they are still real states with real owners — triage puts a
+      # failed run on `needs-po`, the shepherd and triage both use `needs-human`, and a person may
+      # still mark an issue `needs-rework` by hand — and adding a label to an issue does not
+      # create a missing one. This is the workflow every repo has, so this is where they are made.
       - name: Ensure the verdict labels exist
         run: |
           create() {
@@ -59,8 +66,8 @@ jobs:
           }
           create qc-approved 0e8a16 "QC approved this pull request"
           create qc-skipped bfd4f2 "QC could not review — merging is not blocked"
-          create needs-rework d93f0b "QC asked for changes before this can be merged"
-          create needs-po 5319e7 "QC rejected it twice — the PO is re-scoping the brief"
+          create needs-rework d93f0b "Changes are wanted before this merges (set by a person)"
+          create needs-po 5319e7 "The PO is re-scoping this issue"
           create needs-human b60205 "Waiting on one decision from a person — resumes on any comment"
 
       # AGENTS.md and the acceptance criteria are the standard QC judges against, so the review
@@ -99,10 +106,13 @@ jobs:
           # Raw model id — NO provider prefix: this script calls the provider's API directly.
           AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
           AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
-          # How many PO re-scopes one issue may have before it is paused for a human. Unset or 0
-          # means the QC → PO → TEC loop never stops on its own, which is the default.
-          AGENT_MAX_CYCLES: ${{ vars.AGENT_MAX_CYCLES }}
-          AGENT_PAUSE_TIMEOUT: ${{ vars.AGENT_PAUSE_TIMEOUT }}
+          # How long a chain of QC follow-ups may get before QC stops opening them and leaves
+          # the remainder to a person. Default 2. This is the only end this loop has: nothing
+          # else in the gate ever declines to continue.
+          AGENT_MAX_FOLLOWUPS: ${{ vars.AGENT_MAX_FOLLOWUPS }}
+          # AGENT_MAX_CYCLES and AGENT_PAUSE_TIMEOUT used to be passed here. They belonged to the
+          # QC → PO → TEC rework loop and the pause at the end of it; QC no longer has either, so
+          # passing them would only suggest they still do something.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ steps.pr.outputs.issue }}
           DIFF_FILE: ${{ runner.temp }}/pr.diff

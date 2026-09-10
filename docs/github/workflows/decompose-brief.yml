@@ -34,9 +34,21 @@ on:
     # `opened` covers a brief created with the label (which is how the app files one) and
     # `labeled` covers a human attaching it afterwards, or re-attaching it to retry.
     types: [opened, labeled]
-  # Split mode, for the shepherd and for a human who wants one issue broken up on demand.
+  # Split mode, for the shepherd and for a human who wants one issue broken up on demand — and
+  # BRIEF mode, for a brief that stalled.
+  #
+  # `brief_issue` exists because the shepherd had no way to restart one. Its only lever was to
+  # dispatch this workflow with an empty `split_issue`, and the `if` below then matched nothing
+  # at all: the run was created, skipped in one second, and the brief sat exactly where it was
+  # while the shepherd reported that it had "sent it back for decomposition". Re-adding the
+  # `brief` label is not an alternative — GitHub fires no workflow for a label applied with
+  # GITHUB_TOKEN — so the restart has to be an explicit input.
   workflow_dispatch:
     inputs:
+      brief_issue:
+        description: "Brief issue number to (re)decompose (leave empty for none)"
+        required: false
+        type: string
       split_issue:
         description: "Issue number to split into smaller issues (leave empty for none)"
         required: false
@@ -46,18 +58,22 @@ on:
 # new issue, the second run finds `brief-planned` already there and stops, instead of racing the
 # first one and opening the whole plan twice.
 concurrency:
-  group: decompose-brief-${{ github.event.issue.number || inputs.split_issue }}
+  group: decompose-brief-${{ github.event.issue.number || inputs.brief_issue || inputs.split_issue }}
   cancel-in-progress: false
 
 permissions:
   contents: read
   issues: write
+  # The plan ends by dispatching a TEC drain, so the first child starts in seconds rather than
+  # at the next half-hourly timer (see startTecQueue in .github/scripts/ai-provider.js).
+  actions: write
 
 jobs:
   decompose:
     # Only briefs, and only when this event is about the brief label itself — a `labeled` event
     # for some unrelated label on a brief would otherwise re-run the decomposition.
     if: >
+      inputs.brief_issue != '' ||
       inputs.split_issue != '' ||
       (contains(github.event.issue.labels.*.name, 'brief') &&
        (github.event.action != 'labeled' || github.event.label.name == 'brief')) ||
@@ -108,7 +124,7 @@ jobs:
           REPO: ${{ github.repository }}
           # Exactly one of these is set. SPLIT_ISSUE wins inside the script, and it is what turns
           # a `needs-split` label — or a manual dispatch — into a second decomposition pass.
-          BRIEF_NUMBER: ${{ github.event.label.name == 'needs-split' && '' || github.event.issue.number }}
+          BRIEF_NUMBER: ${{ inputs.brief_issue || (github.event.label.name == 'needs-split' && '') || github.event.issue.number }}
           SPLIT_ISSUE: ${{ inputs.split_issue || (github.event.label.name == 'needs-split' && github.event.issue.number) || '' }}
           # The brief's title and body are untrusted user input. They reach the script as env
           # vars rather than as shell interpolation, so nothing in them can run.

@@ -43,6 +43,7 @@ src/
 ├── lib/                      ← data fetching, parsing, business logic — no DOM in here
 └── assets/                   ← images, icons, fonts
 tests/                        ← unit tests, mirroring src/
+README.md                     ← what this is, and how to serve and build it
 ```
 
 New file goes in the folder its neighbours are already in. Do not invent a layout.
@@ -81,7 +82,19 @@ New file goes in the folder its neighbours are already in. Do not invent a layou
     there. A small diff that builds beats a large one that does not.
 11. **Test the logic you add.** New parsing or data code in `src/lib/` gets a unit test. Pure
     markup and styling changes do not need one.
-12. **Comments explain WHY, not what.** Match the density and voice of the file you are editing.
+12. **The README says how to run this, and it stays true.** `README.md` carries an **`## اجرا`
+    ("How to run")** section: the exact commands that take someone from a fresh clone to the site
+    open in a browser — what to install, which command serves it locally, which URL and port it
+    comes up on, and how to produce the production build. Real copy-pasteable commands, never a
+    placeholder; if the project is plain files with no build step, say that and say how to open
+    them. If that section is missing, add it in the pull request you are working on now, even if
+    the issue did not ask. If your change alters how the site is built, served or configured — a
+    new npm script, a changed port, a new environment variable, a new build output directory, a
+    move from plain files to a bundler — that section changes **in the same pull request**. A
+    change that breaks the documented way to run the site is unfinished, not "documented later".
+    `README.md` is always in scope for this, even when the issue lists the files you may touch and
+    the README is not one of them. If nothing about running it changed, leave the README alone.
+13. **Comments explain WHY, not what.** Match the density and voice of the file you are editing.
 
 ## How to add a new page
 

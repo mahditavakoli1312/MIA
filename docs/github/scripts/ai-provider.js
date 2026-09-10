@@ -218,6 +218,61 @@ function missingKeyMessage(ai) {
   );
 }
 
+/**
+ * Starts a drain of TEC's queue, now, instead of waiting for the half-hourly timer.
+ *
+ * THE REASON THIS EXISTS IS A RULE OF GITHUB'S, NOT A DESIGN CHOICE OF OURS: a label applied
+ * with GITHUB_TOKEN fires no workflow. So every one of these roles could queue an issue and
+ * nothing whatsoever would happen —
+ *
+ *   • the PO decomposes a brief and labels five children `by-agent`;
+ *   • the unblock sweep releases a dependent whose blockers all closed;
+ *   • the PO writes a ready brief and auto-queues it;
+ *   • a person answers a paused issue and it goes back in the queue.
+ *
+ * — and in every case the work sat still for up to thirty minutes with a comment on it saying
+ * «@tec — شروع کن». That gap is what made a freshly planned brief look like a team that had
+ * simply not turned up: the plan was right, the labels were right, and nothing was running.
+ *
+ * One API call closes it. The worker's `agent-worker` concurrency group makes it safe to call
+ * from anywhere — a dispatch that arrives while a drain is in flight waits for it rather than
+ * racing it, and the drain it starts rebuilds the queue from the labels, so an extra call is
+ * never wrong, only redundant.
+ *
+ * Failure is not propagated. The timer is still there, and a role must not fail its own run
+ * over an optimisation.
+ */
+async function startTecQueue({ repo, token, ref } = {}) {
+  if (!repo || !token) return false;
+  // A dispatch names a ref, and it must be the branch the workflow actually lives on. Every
+  // workflow that runs these scripts already has the repository in its event payload, so
+  // DEFAULT_BRANCH is set wherever it matters; GITHUB_REF_NAME is the runner's own fallback.
+  const branch = ref || process.env.DEFAULT_BRANCH || process.env.GITHUB_REF_NAME || "main";
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/agent-issue-worker.yml/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ref: branch }),
+      }
+    );
+    if (!res.ok) {
+      console.error(`Could not start the TEC queue: HTTP ${res.status} (the timer will pick it up).`);
+      return false;
+    }
+    console.log("Dispatched a TEC drain — the queued issue starts without waiting for the timer.");
+    return true;
+  } catch (err) {
+    console.error(`Could not start the TEC queue: ${err.message} (the timer will pick it up).`);
+    return false;
+  }
+}
+
 module.exports = {
   PROVIDERS,
   DEFAULT_MODEL,
@@ -226,5 +281,6 @@ module.exports = {
   fmt,
   usageTotal,
   postComment,
+  startTecQueue,
   missingKeyMessage,
 };

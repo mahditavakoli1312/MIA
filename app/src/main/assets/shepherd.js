@@ -323,7 +323,11 @@ async function main() {
       );
       didSomething = true;
     } else if (info.state === "brief") {
-      if (!dryRun) await dispatch("decompose-brief.yml", { split_issue: "" });
+      // `brief_issue`, not an empty `split_issue`. The old call dispatched a run whose `if`
+      // matched nothing, so it was created and skipped in one second while this comment claimed
+      // the brief had been sent back — three sweeps of that and the shepherd marked a brief
+      // `agent-failed` for never moving, having never actually asked anything to move it.
+      if (!dryRun) await dispatch("decompose-brief.yml", { brief_issue: String(issue.number) });
       await nudge(
         issue,
         "⏱️ این نیت تجزیه نشده مانده بود. دوباره فرستادمش برای تجزیه.",

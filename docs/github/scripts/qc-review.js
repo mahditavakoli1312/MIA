@@ -5,27 +5,28 @@
 // against that issue's own acceptance criteria, and leaves a verdict the TEC workflow waits for:
 //
 //   qc-approved  → TEC merges, as it always did.
-//   needs-rework → TEC does not merge; the issue is re-queued with QC's notes in the prompt.
+//   qc-followup  → TEC STILL MERGES. QC's objections are opened as a NEW issue instead.
 //   qc-skipped   → QC could not review (no key, quota, unparseable answer). TEC merges anyway.
 //
-// That last one is the important one. A gate that fails closed would let a rate-limited free model
-// block every merge in the repo, so every failure path here ends in `qc-skipped` and today's
-// behaviour. The gate can only ever *stop* a merge when the model actually said "rework".
+// QC NEVER STOPS A MERGE. IT FILES THE NEXT PIECE OF WORK INSTEAD.
 //
-// THE LOOP DOES NOT END WITH THE WORK ABANDONED.
+// This used to be a blocking gate: "rework" left the pull request open, re-queued the same issue
+// with QC's notes, and — because only one `tec/issue-*` branch may be in flight at a time — held
+// the WHOLE queue behind it while two agents argued about one diff. Two rounds of that escalated
+// to the PO for a re-brief, and past `AGENT_MAX_CYCLES` it stopped for a human. Every one of
+// those states was a way for the plan to stall, and stalling is what actually happened: an issue
+// that never merged, a queue that never drained, and a brief that never shipped.
 //
-// Two rounds of TEC rework, and then the issue goes to the PO rather than to a dead `needs-human`
-// state. A change QC rejects twice is usually not a coding failure at all — it is an issue that
-// never said clearly enough what "done" meant — so the answer is to re-scope it, not to give up
-// on it. The PO rewrites the brief (see po-rebrief.js, which TEC runs before its next attempt),
-// the rework counter starts again against that new brief, and TEC keeps the branch it already
-// built. QC → TEC → QC → PO → TEC → QC … the work is never dropped.
+// So the gate now has exactly one outcome: MERGE. What QC objects to does not disappear and is
+// not argued about — it is opened as a new issue, carrying QC's blocking list as its acceptance
+// criteria and `by-agent` so TEC picks it up. The FIFO queue is ordered oldest-first, so a
+// freshly-opened issue lands AFTER everything already planned: the brief's own issues finish in
+// the order the PO planned them, and QC's improvements follow them rather than interrupting them.
 //
-// The original concern behind the old hard stop is real and has not gone away: two agents can
-// hand work back and forth until the day's free quota is gone and nobody notices. That is what
-// AGENT_MAX_CYCLES is for — a ceiling on PO re-scopes, after which the issue is PAUSED for a
-// human rather than abandoned. It defaults to 0, meaning no ceiling, because a task that stops
-// being worked on is the failure this loop exists to prevent.
+// Nothing is lost and nothing is blocked. The trade the repo is making is explicit: a change can
+// reach the default branch with a criterion QC judged unmet, and the follow-up issue is the
+// record of that. It is the trade this project asked for — a queue that keeps moving beats a
+// queue that is provably correct and stopped.
 
 const fs = require("fs");
 const {
@@ -52,35 +53,53 @@ const runUrl = process.env.RUN_URL || "";
 const verdictFile = process.env.QC_VERDICT_FILE || "";
 
 const APPROVED_LABEL = "qc-approved";
-const REWORK_LABEL = "needs-rework";
 const SKIPPED_LABEL = "qc-skipped";
-const HUMAN_LABEL = "needs-human";
-const PO_LABEL = "needs-po";
+// The label that puts an issue in TEC's queue. The follow-up issue is opened with it, which is
+// the whole mechanism: FIFO is ordered by creation time, so the newest issue is worked last.
 const AGENT_LABEL = "by-agent";
 
-/** Marks QC's rework notes so the TEC prompt can find the latest set, and count the rounds. */
-const REWORK_MARKER = "<!-- qc-rework -->";
-
 /**
- * Marks a PO re-scope. Written by po-rebrief.js, read here: every rework round before it belongs
- * to a brief that no longer exists, so the count restarts from it. Without that, the second
- * cycle would start already over the cap and the loop would stall on its first QC objection.
+ * Stale label from the blocking-gate era. QC no longer applies it, but a repo that ran the old
+ * script may still be carrying it on an issue, where it would read as "still rejected" and make
+ * TEC resume a branch that has already merged. Every run clears it.
  */
-const REBRIEF_MARKER = "<!-- po-rebrief -->";
-
-const MAX_ROUNDS = 2;
+const LEGACY_REWORK_LABEL = "needs-rework";
 
 /**
- * How many times the PO may re-scope one issue before a person is asked about it. 0 — the
- * default — means never ask: the loop keeps going, which is the whole point of it.
+ * Marks the comment that announces a follow-up issue, so a second review of the same pull
+ * request can find the one it already opened instead of opening a duplicate. A human pushing to
+ * the branch re-triggers qc-review.yml, and QC objecting to the same thing twice must not put
+ * the same work in the queue twice.
+ */
+const FOLLOWUP_MARKER = "<!-- qc-followup -->";
+
+/**
+ * How deep in a follow-up chain an issue is, written into the body of every follow-up and read
+ * back when that follow-up is itself reviewed.
  *
- * It does NOT mean "give up". What is past the ceiling is an OWNED PAUSE (§5.11): the issue
- * carries the decision that is actually needed, the options, the answer the team will proceed on
- * by itself, and a deadline — and any human comment on the issue resumes it. Set it to a small
- * number on a repo running free models if you would rather the day's quota survive an issue two
- * agents cannot agree on.
+ * WITHOUT THIS THE LOOP HAS NO FLOOR. The old gate bounded itself by refusing to merge — two
+ * rework rounds, then the PO, then a pause. Merging instead removes every one of those brakes:
+ * QC objects to #10, #11 is opened; TEC builds #11, QC objects to that, #12 is opened; and a
+ * model that is never quite satisfied can spend a repository's whole daily quota on one
+ * increasingly marginal thread. Each round does merge real work, so it is not pure churn — but
+ * it is still a loop with no end written down, and this file is not allowed to have one.
  */
-const MAX_CYCLES = Number.parseInt(process.env.AGENT_MAX_CYCLES || "0", 10) || 0;
+const DEPTH_MARKER = "mia:followup-depth";
+
+/**
+ * How long a follow-up chain may get. The original issue is depth 0, so the default of 2 means:
+ * QC may file a follow-up, and may file one more against that follow-up, and then it is done.
+ *
+ * At the cap QC still merges — it never blocks — but it stops opening issues and leaves what is
+ * left on the pull request, addressed to a person. That is a deliberate asymmetry: an automatic
+ * loop needs an automatic end, and a person deciding "yes, still worth an issue" is the cheapest
+ * end there is. Raise it with an AGENT_MAX_FOLLOWUPS repo variable.
+ */
+const MAX_FOLLOWUPS = Math.max(
+  0,
+  Number.parseInt(process.env.AGENT_MAX_FOLLOWUPS || "2", 10) || 0
+);
+
 const DIFF_LIMIT = 40000;
 
 // QC's own model: AGENT_MODEL_QC when the repo sets one, the repo-wide AGENT_MODEL
@@ -198,23 +217,78 @@ function acceptanceCriteria(body) {
 }
 
 /**
- * How many rework rounds this issue has had **against the brief it currently has**, and how many
- * times the PO has re-scoped it, from the marked comments the two roles leave behind.
+ * The follow-up issue this review already opened, or null.
  *
- * Counting from the last re-scope is what makes the cycle work: the objections QC raised against
- * the old brief were answered by rewriting the brief, so they must not also count against TEC's
- * attempts at the new one. Comments are the record rather than labels because a label can be
- * added and removed by anyone, while these survive a re-run and cannot be reset by relabelling.
+ * qc-review.yml re-runs on every push to the branch, so the same objections can be reviewed
+ * several times before the merge. Opening a new issue each time would fill the queue with
+ * duplicates of one piece of work, so the announcement comment carries [FOLLOWUP_MARKER] and
+ * the number is read back out of it. A comment is the record rather than a label because it
+ * survives a re-run and cannot be reset by relabelling.
  */
-async function loopState() {
+async function existingFollowup() {
   const comments = await gh(`/issues/${issueNumber}/comments?per_page=100`).catch(() => []);
-  const bodies = comments.map((c) => c.body || "");
-  const cycles = bodies.filter((b) => b.includes(REBRIEF_MARKER)).length;
-  const lastRebrief = bodies.map((b) => b.includes(REBRIEF_MARKER)).lastIndexOf(true);
-  const rounds = bodies
-    .slice(lastRebrief + 1)
-    .filter((b) => b.includes(REWORK_MARKER)).length;
-  return { rounds, cycles };
+  for (const comment of comments.slice().reverse()) {
+    const body = comment.body || "";
+    if (!body.includes(FOLLOWUP_MARKER)) continue;
+    const found = body.match(/mia:followup=(\d+)/);
+    if (found) return Number.parseInt(found[1], 10);
+  }
+  return null;
+}
+
+/** This issue's place in a follow-up chain. Absent marker = an original issue = depth 0. */
+function followupDepth(body) {
+  const found = String(body || "").match(new RegExp(`${DEPTH_MARKER}=(\\d+)`));
+  return found ? Number.parseInt(found[1], 10) : 0;
+}
+
+/**
+ * Opens the issue that carries QC's objections forward, and returns its number.
+ *
+ * Two details matter and neither is cosmetic:
+ *
+ *  • It is opened with `by-agent` and NOTHING else. TEC's queue is every open `by-agent` issue
+ *    sorted oldest-first, so an issue created now is behind every issue the PO already planned.
+ *    That is exactly the order asked for — the brief finishes first, QC's improvements follow.
+ *  • The blocking list becomes a real «معیارهای پذیرش» section, because that heading is what
+ *    acceptanceCriteria() above parses when this issue is itself reviewed later. An objection
+ *    written as prose would be work nobody could grade.
+ */
+async function openFollowup({ items, parent, prNumber: pr, unmet, depth }) {
+  const body = [
+    `این ایشو از بازبینی QC روی #${pr} (برای #${parent.number}) در آمده.`,
+    `<!-- ${DEPTH_MARKER}=${depth} -->`,
+    "",
+    "## شرح",
+    "",
+    `تغییرِ #${parent.number} merge شد، ولی این چند مورد از نظر من هنوز باید انجام شود. ` +
+      "هیچ‌کدام جلوی merge را نگرفت — کار قبلی روی شاخهٔ اصلی است و این ایشو ادامه‌اش است.",
+    "",
+    "## معیارهای پذیرش",
+    "",
+    ...items.map((item) => `- [ ] ${item}`),
+    "",
+    ...(unmet.length
+      ? ["## معیارهایی که در بازبینی محقق نشده بود", "", ...unmet.map((row) => `- ${row}`), ""]
+      : []),
+    "---",
+    "",
+    `از ایشو #${parent.number} — ${parent.title} · از بازبینی #${pr}`,
+  ].join("\n");
+
+  const created = await gh("/issues", {
+    method: "POST",
+    body: {
+      title: `پیگیری QC برای #${parent.number} — ${parent.title}`.slice(0, 240),
+      body,
+      // `by-agent` and nothing else, deliberately. Every label this team uses is a STATE with an
+      // owner and an automatic exit (agent-voice.js), and a second "this came from QC" label
+      // would be a label with no state behind it — one more thing on the issue that nothing ever
+      // acts on. The title and the body say where it came from; the queue only needs by-agent.
+      labels: [AGENT_LABEL],
+    },
+  });
+  return created.number;
 }
 
 // --- Validation -----------------------------------------------------------------------------
@@ -303,10 +377,17 @@ const SYSTEM = [
   "autonomous coding agent driven by a small model. Your job is to decide ONE thing: can this be",
   "merged as it is?",
   "",
+  "WHAT YOUR ANSWER DOES. This pull request is going to merge either way — this team does not",
+  "hold a branch open while two agents argue about one diff. What your answer decides is what",
+  "happens NEXT: every entry you put in `blocking` is opened as a new issue and worked after the",
+  "work already planned. So judge exactly as strictly as you would if you were blocking the",
+  "merge — a criterion that is not met is not met — and write each `blocking` entry as a piece",
+  "of work somebody can pick up on its own, without the diff in front of them.",
+  "",
   "Assume the failure modes of a hurried junior: the happy path only, missing loading/empty/error",
   "states, swallowed exceptions, hard-coded colours, sizes or strings that belong in the project's",
-  "tokens and resources, files changed that the issue never mentioned, and dependencies added",
-  "without reason.",
+  "tokens and resources, files changed that the issue never mentioned, dependencies added",
+  "without reason, and a change to how the project is run that never reached the README.",
   "",
   "You are the person who will have to answer for this merge. Two things follow from that, and",
   "they pull in opposite directions on purpose: approve when the criteria are met even if you",
@@ -330,9 +411,24 @@ const SYSTEM = [
   "  using its number as the id. Add no rows of your own.",
   '- "rework" requires a non-empty `blocking` list, and every entry must be a concrete change ("the',
   '  error state has no retry action") — never a preference ("could be cleaner") and never a',
-  "  request for work the issue did not ask for. TEC will act on this list literally.",
-  '- Choose "approve" when every criterion is met and nothing in `blocking` would be worth another',
-  "  round. A small imperfection that no criterion asks about is not a blocker.",
+  "  request for work the issue did not ask for. TEC will act on this list literally, as the",
+  "  acceptance criteria of the follow-up issue, so each entry must stand on its own: name the",
+  "  file or the screen, and say what must be true when it is done.",
+  "- THE ONE EXCEPTION to that last clause is the README's \"how to run\" section. TEC's rules",
+  "  oblige it to keep that section true in the same pull request, so it is a standing",
+  "  requirement of every change, not extra scope — block on it when, and only when, the DIFF",
+  "  ITSELF shows that the way to run the project changed and the README did not follow: a new or",
+  "  renamed script or task, a changed port or entry point, a new required environment variable or",
+  "  config key, a new install or build step, a new dependency someone must install by hand.",
+  "  Then `blocking` names the section and what it must now say.",
+  "  Do NOT block because the README is merely absent from a diff that did not change how the",
+  "  project runs — most changes do not, and asking for a README edit on each of those is the",
+  "  churn this rule exists to prevent. You are judging the diff, so if it does not show the",
+  "  README, say so in the note rather than assuming its contents either way.",
+  '- Choose "approve" when every criterion is met. You may still list `blocking` entries on an',
+  "  approve — they become the same follow-up issue. Leave `blocking` EMPTY when there is",
+  "  genuinely nothing left to do: an empty list is what closes a piece of work cleanly, and",
+  "  filing a follow-up for a small imperfection no criterion asks about is churn.",
   "- Notes and blocking entries in the SAME language as the issue (MIA issues are Persian).",
   "- `message` is you speaking to a colleague who is about to act on this: say what you actually",
   "  read (which files, which criterion), what decided it for you, and anything you could not",
@@ -352,9 +448,13 @@ async function main() {
 
   // A re-review of the same PR starts from a clean slate: a stale verdict label would be read by
   // TEC's gate as this run's answer.
-  for (const stale of [APPROVED_LABEL, SKIPPED_LABEL, REWORK_LABEL]) {
+  for (const stale of [APPROVED_LABEL, SKIPPED_LABEL, LEGACY_REWORK_LABEL]) {
     await unlabel(prNumber, stale);
   }
+  // And on the issue: a `needs-rework` left over from the blocking-gate era makes TEC's claim
+  // step resume a branch instead of cutting a fresh one. QC never sets it now, so any that is
+  // there is stale by definition.
+  await unlabel(issueNumber, LEGACY_REWORK_LABEL);
 
   if (ai.keys.length === 0) {
     await skip(missingKeyMessage(ai));
@@ -434,22 +534,27 @@ async function main() {
 
   const table = criteriaTable(review.rows, criteria);
 
-  if (review.verdict === "approve") {
+  // WHATEVER QC DECIDED, THIS PULL REQUEST MERGES. The only question left is whether anything
+  // has to be carried forward, and a carried-forward objection is a NEW issue at the back of the
+  // queue — never this issue re-opened, and never the merge withheld.
+  const carry = review.blocking;
+  const unmet = review.rows
+    .filter((row) => !row.met)
+    .map((row) => {
+      const index = Number.parseInt(row.id, 10);
+      const text = Number.isInteger(index) && criteria[index - 1] ? criteria[index - 1] : row.id;
+      return row.note ? `${text} — ${row.note}` : text;
+    });
+
+  if (carry.length === 0) {
+    // A clean approve: nothing to carry, nothing to file.
     reportVerdict("approve");
     await label(prNumber, [APPROVED_LABEL]);
-    // The issue is no longer in a rework state, and this is the only place that can know it.
-    // Left behind, the label reads as "still rejected" on a change that is about to merge —
-    // and TEC's own claim step uses it to decide whether to resume a branch, so a stale one
-    // would be a lie told to the next run.
-    await unlabel(issueNumber, REWORK_LABEL);
     await commentOnPr(
-      `✅ **QC approves this pull request.**\n\n` +
+      "✅ **تأیید می‌کنم — چیزی برای بعد نمانده.**\n\n" +
         opening(review.message) +
         `${table}\n\n` +
-        (review.blocking.length
-          ? `Not blocking, but worth an issue of its own:\n${review.blocking.map((b) => `- ${b}`).join("\n")}\n\n`
-          : "") +
-        "TEC may merge." +
+        "@tec می‌تواند merge کند." +
         spendFooter(answer.usage),
       { from: "qc", to: "tec", next: "merge کن", pr: prNumber, issue: issueNumber, sla: "60m" }
     );
@@ -459,163 +564,118 @@ async function main() {
       token: githubToken,
       patch: { state: "qc-approved", owner: "tec", next: "merge", branchOrPr: `#${prNumber}` },
     });
-    console.log("QC approved.");
+    console.log("QC approved with nothing to carry forward.");
     return;
   }
 
-  // Rework. The counts come from the roles' own marked comments on the issue, so they survive a
-  // re-run of this workflow and cannot be reset by relabelling.
-  const { rounds, cycles } = await loopState();
-  const round = rounds + 1;
-  const blockingList = review.blocking.map((item) => `- ${item}`).join("\n");
-  reportVerdict("rework");
+  // There is something to carry. The merge still happens; this only decides where the objections
+  // live afterwards.
+  const merging = review.verdict === "approve";
+  const carryList = carry.map((item) => `- ${item}`).join("\n");
+  reportVerdict(merging ? "approve" : "followup");
+  await label(prNumber, [APPROVED_LABEL]);
 
-  // "3/2" would read like a typo; past the cap the count is the point, not the ratio.
-  const roundLabel =
-    round > MAX_ROUNDS ? `round ${round}, past the ${MAX_ROUNDS}-round limit` : `round ${round}/${MAX_ROUNDS}`;
+  // THE END OF THE CHAIN. An issue that is itself the Nth follow-up gets no N+1th: QC merges,
+  // says what is left on the pull request, and hands the decision to a person. Everything else
+  // in this file refuses to stop the work; this is the one place that refuses to continue it
+  // forever, and the two are not in conflict — the merge still happens either way.
+  const depth = followupDepth(issue.body);
+  const atCap = depth >= MAX_FOLLOWUPS;
 
-  await label(prNumber, [REWORK_LABEL]);
+  // One follow-up per review thread. qc-review.yml re-runs on every push to the branch, so
+  // without this a human fixing one objection by hand would get a second copy of all of them.
+  let followup = atCap ? null : await existingFollowup();
+  if (atCap) {
+    console.log(
+      `#${issueNumber} is already ${depth} follow-up(s) deep (AGENT_MAX_FOLLOWUPS=${MAX_FOLLOWUPS}) — ` +
+        "merging and leaving the rest to a person."
+    );
+  } else if (followup) {
+    console.log(`Follow-up issue #${followup} already exists for #${issueNumber}; not opening another.`);
+  } else {
+    try {
+      followup = await openFollowup({
+        items: carry,
+        parent: { number: Number(issueNumber), title: issue.title },
+        prNumber,
+        unmet,
+        depth: depth + 1,
+      });
+      // The marker AND the number, in one comment on the parent issue: this is the record a
+      // re-review reads, and the trail a person follows from the old issue to the new one.
+      await commentOnIssue(
+        `${FOLLOWUP_MARKER}\n<!-- mia:followup=${followup} -->\n` +
+          `📋 **آنچه در بازبینی #${prNumber} گرفتم، در #${followup} ادامه پیدا می‌کند.**\n\n` +
+          `${carryList}\n\n` +
+          `این ایشو با merge بسته می‌شود و #${followup} در انتهای صف TEC قرار می‌گیرد — یعنی بعد از ` +
+          "هر کاری که از قبل برنامه‌ریزی شده، نه به‌جای آن.",
+        {
+          from: "qc",
+          to: "tec",
+          next: `بعد از صف فعلی، #${followup} را بردار`,
+          issue: issueNumber,
+          pr: prNumber,
+          sla: "60m",
+        }
+      );
+    } catch (err) {
+      // The one failure that must not become a blocked merge. If the issue cannot be opened the
+      // objections still have to end up somewhere a person will see them, so they stay on the
+      // pull request and the merge goes ahead.
+      console.error(`Could not open the follow-up issue: ${err.message}`);
+      followup = null;
+    }
+  }
+
+  const where = followup
+    ? `این‌ها را در #${followup} گذاشتم تا بعد از صف فعلی انجام شود.`
+    : atCap
+      ? `این ایشو خودش ${depth} مرحله پیگیریِ QC است، و من بیش از ${MAX_FOLLOWUPS} مرحله پیش ` +
+        "نمی‌روم — وگرنه این زنجیره جایی تمام نمی‌شود. اگر این موارد هنوز ارزش دارند، یک ایشوی " +
+        "تازه برایشان باز کنید."
+      : "نتوانستم برایشان ایشوی جدا باز کنم، پس همین‌جا ثبت‌شان می‌کنم — لطفاً دستی ایشو بسازید.";
+
   await commentOnPr(
-    `🛑 **QC asks for rework (${roundLabel}).**\n\n` +
+    (merging
+      ? "✅ **تأیید می‌کنم، با یک ایشوی پیگیری.**\n\n"
+      : "✅ **ایراد دارم، ولی جلوی merge را نمی‌گیرم.**\n\n") +
       opening(review.message) +
       `${table}\n\n` +
-      `**Blocking:**\n${blockingList}\n\n${firstLine(review)}` +
-      "این pull request به این شکل merge نمی‌شود." +
+      `**آنچه هنوز باید انجام شود:**\n${carryList}\n\n${firstLine(review)}` +
+      `${where} این pull request merge می‌شود؛ جلوی صف گرفته نمی‌شود.` +
       spendFooter(answer.usage),
     {
       from: "qc",
-      to: "tec",
-      next: `اول این را درست کن: ${review.first || review.blocking[0]}`,
+      // At the cap the next move is a judgement, not a task — and it is on a pull request that
+      // is about to merge and an issue that is about to close, so nothing is left waiting on it.
+      to: atCap ? HUMAN : "tec",
+      next: followup
+        ? `merge کن، بعد سراغ #${followup} برو`
+        : atCap
+          ? "اگر این موارد هنوز لازم‌اند، خودتان یک ایشو برایشان باز کنید"
+          : "merge کن و ایرادها را دستی ایشو کن",
       pr: prNumber,
       issue: issueNumber,
       sla: "60m",
     }
   );
 
-  if (round > MAX_ROUNDS) {
-    // TEC HAS HAD ITS TURNS — HAND THE ISSUE TO THE PO, DO NOT DROP IT.
-    //
-    // Two attempts that both failed the same acceptance criteria is rarely a coding problem. It
-    // is an issue that did not say precisely enough what "done" looks like, and asking TEC a
-    // third time in the same words would spend another round to learn that again. So the PO
-    // re-scopes it — po-rebrief.js, which TEC runs before its next attempt — and the counter
-    // restarts against the new brief.
-    if (MAX_CYCLES > 0 && cycles >= MAX_CYCLES) {
-      // Only reachable when the repo asked for a ceiling. The issue is PAUSED, not abandoned:
-      // everything is still on the branch and the pull request is still open.
-      // AN OWNED PAUSE, NOT A DEAD END.
-      //
-      // The old text here said "sharpen the issue by hand, then comment `@tec`" — which asks a
-      // person to know the protocol, and leaves the issue stopped until they do. A pause has to
-      // carry four things instead: the decision only they can make, the options, what the team
-      // will do by itself if nobody answers, and by when. Any comment on the issue resumes it
-      // (see the `resume` job in ai-role-review.yml); the shepherd applies the default at the
-      // deadline. Nothing about it requires knowing how this machinery works.
-      const pauseTimeout = process.env.AGENT_PAUSE_TIMEOUT || "72h";
-      const question =
-        `دامنهٔ این کار را کم کنیم یا معیارهای پذیرش را عوض کنیم؟ (الف) همین ایراد را از دامنه ` +
-        `بیرون بگذاریم و بقیه را merge کنیم (ب) بریف را خودتان تیز کنید (ج) سقف ` +
-        `\`AGENT_MAX_CYCLES\` را بالا ببرید تا تیم باز هم تلاش کند`;
-      await label(issueNumber, [HUMAN_LABEL]);
-      await unlabel(issueNumber, AGENT_LABEL);
-      await commentOnIssue(
-        `⏸️ **اینجا یک تصمیم با شماست.** بریف را ${cycles} بار بازتعریف کردیم ` +
-          `(\`AGENT_MAX_CYCLES=${MAX_CYCLES}\`) و باز هم از نظر من قابل merge نیست.\n\n` +
-          `هیچ چیزی دور ریخته نشده — کار روی \`tec/issue-${issueNumber}\` است و ایرادهای باقی‌مانده ` +
-          `روی #${prNumber}.\n\n**پرسش:** ${question}\n\n` +
-          `**اگر جوابی نیاید:** گزینهٔ الف — ایرادِ باقی‌مانده را به یک ایشوی جدا منتقل می‌کنیم و ` +
-          `بقیهٔ کار را merge می‌کنیم.\n\n` +
-          `تا \`${pauseTimeout}\` منتظر می‌مانم. یک کامنت ساده روی همین ایشو کافی است — لازم نیست ` +
-          "برچسبی را دست بزنید.",
-        {
-          from: "qc",
-          to: HUMAN,
-          next: question,
-          issue: issueNumber,
-          pr: prNumber,
-          sla: pauseTimeout,
-        }
-      );
-      await updateLedger({
-        repo,
-        issueNumber,
-        token: githubToken,
-        patch: {
-          state: "needs-human",
-          owner: HUMAN,
-          next: "تصمیم دربارهٔ دامنهٔ کار",
-          reworkRound: `${round}`,
-          poCycles: cycles,
-          branchOrPr: `#${prNumber}`,
-        },
-      });
-      console.log(`Cycle ceiling reached; issue #${issueNumber} paused for a human.`);
-      return;
-    }
-
-    // The objections from THIS cycle are what the PO has to design around, so they go on the
-    // issue under the rework marker exactly as a normal round would — po-rebrief.js reads them.
-    await commentOnIssue(
-      `${REWORK_MARKER}\n🛑 **QC rework round ${round}** — from the review of #${prNumber}:\n\n` +
-        `${blockingList}`,
-      { from: "qc", to: "po", next: "بریف را از روی این ایرادها بازتعریف کن", issue: issueNumber, sla: "60m" }
-    );
-    await unlabel(issueNumber, REWORK_LABEL);
-    await label(issueNumber, [PO_LABEL, AGENT_LABEL]);
-    await commentOnIssue(
-      `🧭 **Handing this to the PO.** QC has asked for rework ${MAX_ROUNDS} time(s) against the ` +
-        `current brief, so the brief itself is the problem, not the attempt.\n\n` +
-        "The PO will re-scope this issue from QC's objections and the change TEC actually made, " +
-        "and TEC will then continue on the same branch against the new brief. Nothing is being " +
-        "abandoned and no work is thrown away.",
-      { from: "qc", to: "po", next: "ایشو را بازتعریف کن تا TEC دوباره شروع کند", issue: issueNumber, sla: "60m" }
-    );
-    await updateLedger({
-      repo,
-      issueNumber,
-      token: githubToken,
-      patch: {
-        state: "needs-po",
-        owner: "po",
-        next: "بازتعریف بریف از روی ایرادهای QC",
-        reworkRound: `${round}`,
-        poCycles: cycles + 1,
-        branchOrPr: `#${prNumber}`,
-      },
-    });
-    console.log(`QC rework cap reached; issue #${issueNumber} handed to the PO (cycle ${cycles + 1}).`);
-    return;
-  }
-
-  // Re-queue: the notes on the issue (marked, so the TEC prompt can find the latest set) and the
-  // label that puts it back at the end of the queue.
-  await commentOnIssue(
-    `${REWORK_MARKER}\n🛑 **QC rework round ${round}/${MAX_ROUNDS}** — from the review of #${prNumber}:\n\n` +
-      `${blockingList}\n\nTEC will pick this up again with these notes in its prompt.`,
-    {
-      from: "qc",
-      to: "tec",
-      next: `اول این را درست کن: ${review.first || review.blocking[0]}`,
-      issue: issueNumber,
-      pr: prNumber,
-      sla: "60m",
-    }
-  );
-  await label(issueNumber, [REWORK_LABEL, AGENT_LABEL]);
   await updateLedger({
     repo,
     issueNumber,
     token: githubToken,
     patch: {
-      state: "needs-rework",
+      state: "qc-approved",
       owner: "tec",
-      next: review.blocking[0],
-      reworkRound: `${round}/${MAX_ROUNDS}`,
-      poCycles: cycles,
+      next: followup ? `merge، سپس #${followup}` : "merge",
       branchOrPr: `#${prNumber}`,
     },
   });
-  console.log(`QC requested rework (round ${round}); issue #${issueNumber} re-queued.`);
+  console.log(
+    followup
+      ? `QC carried ${carry.length} item(s) forward into #${followup}; the merge is not blocked.`
+      : `QC carried ${carry.length} item(s) forward on the pull request; the merge is not blocked.`
+  );
 }
 
 main().catch(async (err) => {

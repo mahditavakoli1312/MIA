@@ -21,6 +21,10 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Both jobs below can put an issue back in TEC's queue, and a label applied with GITHUB_TOKEN
+  # starts no workflow run. They dispatch the drain themselves so "@tec — شروع کن" is true when
+  # it is written, rather than up to thirty minutes later.
+  actions: write
 
 jobs:
   # Runs before the advisory job and independently of it: an answer to a paused issue is usually
@@ -42,6 +46,12 @@ jobs:
             '🧭 ممنون — همین را می‌گذارم مبنای کار و ادامه می‌دهیم.' \
             '**قدم بعدی:** @tec — با توجه به این جواب، کار را از سر بگیر.' \
             '<!-- mia:handoff v=1 from=po to=tec next="کار را با جواب تازه از سر بگیر" issue='"$ISSUE_NUMBER"' sla=60m -->')" || true
+          # …and actually call @tec. The label above was applied with GITHUB_TOKEN, which starts
+          # no workflow run, so the sentence "کار را از سر بگیر" would otherwise be a promise the
+          # repo keeps up to thirty minutes late.
+          gh workflow run agent-issue-worker.yml >/dev/null 2>&1 \
+            && echo "Dispatched a TEC drain — the answer resumes the work immediately." \
+            || echo "::warning::Could not dispatch the drain; the scheduled one picks it up."
 
   respond:
     runs-on: ubuntu-latest

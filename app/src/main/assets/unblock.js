@@ -18,6 +18,7 @@
 
 const {
   postComment,
+  startTecQueue,
 } = require("./ai-provider.js");
 const { updateLedger } = require("./ledger.js");
 
@@ -95,6 +96,8 @@ async function main() {
     console.log(closedNumber ? `Nothing was waiting on #${closedNumber}.` : "Nothing is blocked.");
     return;
   }
+
+  let released = 0;
 
   // One lookup per distinct blocker, not per dependent: five children of the same parent would
   // otherwise ask GitHub the same question five times.
@@ -174,7 +177,13 @@ async function main() {
       patch: { state: AGENT_LABEL, owner: "tec", next: "شروع پیاده‌سازی" },
     });
     console.log(`#${issue.number} unblocked and queued.`);
+    released += 1;
   }
+
+  // `by-agent` was applied with GITHUB_TOKEN, which starts no workflow run. Without this the
+  // issue this sweep just freed would wait for the worker's timer — up to half an hour of a
+  // queue that has something in it and nothing running.
+  if (released > 0) await startTecQueue({ repo, token: githubToken });
 }
 
 main().catch((err) => {

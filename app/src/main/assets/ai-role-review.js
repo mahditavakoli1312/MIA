@@ -28,6 +28,7 @@ const {
   fmt,
   usageTotal,
   postComment: postIssueComment,
+  startTecQueue,
   missingKeyMessage,
 } = require("./ai-provider.js");
 const { SEATS, HUMAN } = require("./agent-voice.js");
@@ -360,6 +361,10 @@ async function main() {
     outcome.note +
     spendFooter(spend);
   await postComment(reply, replyHandoff(tagged, outcome));
+  // Both of these put `by-agent` on the issue with GITHUB_TOKEN, which starts no workflow run —
+  // so the reply would name @tec as the next owner and nothing would call @tec for up to half an
+  // hour. (`toPo` is queued too: the PO's re-scope runs inside TEC's own claim step.)
+  if (outcome.queued || outcome.toPo) await startTecQueue({ repo, token: githubToken });
   if (outcome.queued || outcome.toPo) {
     await updateLedger({
       repo,
