@@ -1,0 +1,190 @@
+<!-- Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/). -->
+<!--
+  READ THIS FILE BEFORE YOU BUILD YOUR FIRST PAGE.
+
+  It is the whole design system in use, in one document: the page shell, every component, and —
+  more importantly — the four states each page owes its visitor (loading, empty, error, content).
+  Copy the shape of it. Do not copy raw values out of it, because there are none to copy: every
+  colour and every number on this page comes from a token.
+
+  It is also a real page. Open it in a browser and it works, which is what makes it worth keeping
+  honest: a reference that has drifted from the stylesheet stops being a reference.
+
+  The direction is `rtl` and the language `fa` because that is what this project's content is.
+  For a left-to-right product, change these two attributes here and delete nothing else — the
+  stylesheet uses logical properties (`padding-inline`, `border-block-end`, `text-align: start`)
+  throughout, so it mirrors on its own.
+-->
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>نمونهٔ دیزاین‌سیستم</title>
+
+    <!-- Order matters: tokens define the scale, theme paints with it, components use both. -->
+    <link rel="stylesheet" href="./styles/tokens.css" />
+    <link rel="stylesheet" href="./styles/theme.css" />
+    <link rel="stylesheet" href="./styles/components.css" />
+  </head>
+
+  <body>
+    <div class="mia-page">
+      <header class="mia-page__header">
+        <h1 class="mia-page__title">نمونهٔ دیزاین‌سیستم</h1>
+        <span class="mia-chip mia-chip--accent">MIA</span>
+      </header>
+
+      <main class="mia-page__body">
+        <div class="mia-stack">
+          <!-- ============================================================================
+               STATE 1 — CONTENT. The happy path, and the only one most pages remember.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="content-heading">
+            <h2 id="content-heading">محتوا</h2>
+
+            <article class="mia-card">
+              <h3 class="mia-card__title">یک کارت معمولی</h3>
+              <p class="mia-card__body">
+                هر عدد و هر رنگ روی این صفحه از یک توکن می‌آید. اگر توکنی که لازم دارید نیست،
+                آن را به <code>tokens.css</code> اضافه کنید — هرگز مقدار را داخل صفحه ننویسید.
+              </p>
+            </article>
+
+            <!-- A card that is itself a link stays an <a>: it is a destination, so it must be
+                 reachable by keyboard and openable in a new tab like any other link. -->
+            <a class="mia-card mia-card--interactive" href="#content-heading">
+              <h3 class="mia-card__title">کارتی که خودش لینک است</h3>
+              <p class="mia-card__body">با Tab می‌شود به آن رسید و با Enter بازش کرد.</p>
+            </a>
+
+            <div class="mia-row">
+              <button class="mia-btn mia-btn--primary" type="button">اقدام اصلی</button>
+              <button class="mia-btn mia-btn--secondary" type="button">اقدام فرعی</button>
+              <button class="mia-btn mia-btn--danger" type="button">حذف</button>
+              <button class="mia-btn mia-btn--primary" type="button" aria-busy="true" disabled>
+                <span class="mia-btn__spinner" aria-hidden="true"></span>
+                در حال ارسال…
+              </button>
+            </div>
+
+            <div class="mia-row">
+              <span class="mia-chip">برچسب</span>
+              <span class="mia-chip mia-chip--accent">برچسب مهم</span>
+            </div>
+          </section>
+
+          <!-- ============================================================================
+               A FORM. Every field says what it is, and an invalid one says why.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="form-heading">
+            <h2 id="form-heading">فرم</h2>
+
+            <div class="mia-card mia-stack mia-stack--tight">
+              <div class="mia-field">
+                <label class="mia-field__label" for="name">نام</label>
+                <input class="mia-field__input" id="name" name="name" type="text" placeholder="نام شما" />
+              </div>
+
+              <!--
+                The invalid field. `aria-invalid` turns it red AND is what a screen reader
+                announces, so the two can never disagree — and `aria-describedby` ties the message
+                to the input, so "چرا؟" is answered without hunting for the red text.
+              -->
+              <div class="mia-field">
+                <label class="mia-field__label" for="email">ایمیل</label>
+                <input
+                  class="mia-field__input"
+                  id="email"
+                  name="email"
+                  type="email"
+                  value="not-an-email"
+                  aria-invalid="true"
+                  aria-describedby="email-message"
+                />
+                <p class="mia-field__message" id="email-message">قالب ایمیل درست نیست.</p>
+              </div>
+
+              <div class="mia-field">
+                <label class="mia-field__label" for="note">توضیح</label>
+                <textarea class="mia-field__textarea" id="note" name="note" rows="3"></textarea>
+              </div>
+
+              <div class="mia-row mia-row--between">
+                <span class="text-muted">همهٔ فیلدها الزامی هستند.</span>
+                <button class="mia-btn mia-btn--primary" type="button">ذخیره</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================================
+               STATE 2 — LOADING. The skeleton when the shape is known, the spinner when not.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="loading-heading">
+            <h2 id="loading-heading">در حال بارگذاری</h2>
+
+            <div class="mia-card" aria-hidden="true">
+              <div class="mia-skeleton mia-skeleton--title"></div>
+              <div class="mia-skeleton mia-skeleton--text"></div>
+              <div class="mia-skeleton mia-skeleton--text" style="width: 80%"></div>
+            </div>
+
+            <!-- `role="status"` announces it without stealing focus; the spinner itself is
+                 decorative, so the text next to it is what actually gets read out. -->
+            <div class="mia-loading" role="status">
+              <span class="mia-loading__spinner" aria-hidden="true"></span>
+              <span>در حال دریافت اطلاعات…</span>
+            </div>
+          </section>
+
+          <!-- ============================================================================
+               STATE 3 — EMPTY. Not an error. A page without this looks broken when it is
+               merely empty, which is what every visitor sees on their first visit.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="empty-heading">
+            <h2 id="empty-heading">خالی</h2>
+
+            <div class="mia-card">
+              <div class="mia-empty">
+                <p class="mia-empty__title">هنوز چیزی اینجا نیست</p>
+                <p class="mia-empty__description">
+                  اولین مورد را بسازید تا اینجا نمایش داده شود.
+                </p>
+                <button class="mia-btn mia-btn--primary" type="button">ساختن اولین مورد</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================================================================
+               STATE 4 — ERROR, ALWAYS WITH A WAY OUT. An error that only says what broke
+               leaves the visitor on a dead page.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="error-heading">
+            <h2 id="error-heading">خطا</h2>
+
+            <div class="mia-error" role="alert">
+              <p class="mia-error__title">دریافت اطلاعات ناموفق بود</p>
+              <p class="mia-error__message">اتصال شبکه برقرار نشد. دوباره تلاش کنید.</p>
+              <button class="mia-btn mia-btn--secondary" type="button">تلاش دوباره</button>
+            </div>
+          </section>
+
+          <!-- ============================================================================
+               DIRECTION. The page is RTL. These two blocks are not, and this is the only
+               correct way to say so — on the block, never on the page.
+               ============================================================================ -->
+          <section class="mia-stack mia-stack--tight" aria-labelledby="direction-heading">
+            <h2 id="direction-heading">جهت متن</h2>
+
+            <div class="mia-card">
+              <p class="mia-card__body">
+                کد و آدرس باید چپ‌به‌راست بمانند، وگرنه به‌هم می‌ریزند:
+              </p>
+              <pre class="mia-ltr mia-scroll-x"><code>npm run build -- --base=/my-repo/</code></pre>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

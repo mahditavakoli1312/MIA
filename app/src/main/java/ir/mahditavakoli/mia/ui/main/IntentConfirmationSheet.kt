@@ -27,6 +27,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ir.mahditavakoli.mia.data.model.ActionType
+import ir.mahditavakoli.mia.data.model.ProjectType
 
 /**
  * The last stop before a command runs: everything MIA understood, one row per intent, editable.
@@ -62,6 +64,7 @@ fun IntentConfirmationSheet(
     onTitleChange: (Int, String) -> Unit,
     onDueDateChange: (Int, String) -> Unit,
     onAcknowledgeChange: (Int, Boolean) -> Unit,
+    onProjectTypeChange: (Int, ProjectType) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -98,7 +101,8 @@ fun IntentConfirmationSheet(
                         enabled = !state.isExecuting,
                         onTitleChange = { onTitleChange(row.id, it) },
                         onDueDateChange = { onDueDateChange(row.id, it) },
-                        onAcknowledgeChange = { onAcknowledgeChange(row.id, it) }
+                        onAcknowledgeChange = { onAcknowledgeChange(row.id, it) },
+                        onProjectTypeChange = { onProjectTypeChange(row.id, it) }
                     )
                 }
             }
@@ -138,7 +142,8 @@ private fun IntentRow(
     enabled: Boolean,
     onTitleChange: (String) -> Unit,
     onDueDateChange: (String) -> Unit,
-    onAcknowledgeChange: (Boolean) -> Unit
+    onAcknowledgeChange: (Boolean) -> Unit,
+    onProjectTypeChange: (ProjectType) -> Unit
 ) {
     val accent =
         if (row.isDestructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
@@ -173,6 +178,17 @@ private fun IntentRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            // The one decision a create_project row carries that cannot be changed afterwards
+            // without rewriting files in the repo — so it is asked here, before the repo exists.
+            if (row.intent.actionType == ActionType.CREATE_PROJECT) {
+                Spacer(Modifier.height(10.dp))
+                ProjectTypePicker(
+                    selected = row.intent.projectType,
+                    enabled = enabled,
+                    onSelect = onProjectTypeChange
+                )
             }
 
             // Project-level actions have no task to edit; showing empty fields for them would
@@ -227,6 +243,56 @@ private fun IntentRow(
                 }
             }
         }
+    }
+}
+
+/**
+ * Picks what a new project is going to be.
+ *
+ * The choice decides which `AGENTS.md` and which design system MIA commits into the repo, and
+ * `AGENTS.md` is injected into every agent prompt — so a project created as Android when it is a
+ * website has agents that were told to write Jetpack Compose before they read the first issue.
+ * That is not something the user can spot from the sheet afterwards, which is why the row states
+ * the consequence under the chips rather than just naming three options.
+ *
+ * [selected] is null when the command did not say and the classifier honestly declined to guess.
+ * Nothing is preselected in that case and the row says so: a preselected default here reads as
+ * "MIA worked it out", and the whole point is that it did not.
+ */
+@Composable
+private fun ProjectTypePicker(
+    selected: ProjectType?,
+    enabled: Boolean,
+    onSelect: (ProjectType) -> Unit
+) {
+    Column {
+        Text(
+            text = "نوع پروژه",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ProjectType.entries.forEach { type ->
+                FilterChip(
+                    selected = selected == type,
+                    onClick = { onSelect(type) },
+                    enabled = enabled,
+                    label = { Text(type.persianLabel, style = MaterialTheme.typography.labelMedium) }
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = selected?.persianHint
+                ?: "مشخص نشد — یکی را انتخاب کنید تا قواعد و دیزاین‌سیستم درست در مخزن ساخته شود.",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected == null) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+        )
     }
 }
 

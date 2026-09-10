@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ir.mahditavakoli.mia.data.model.ActionType
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
@@ -505,6 +506,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Edits one row's due date in place. Blank clears it back to "no deadline". */
     fun onConfirmationDueDateChange(rowId: Int, dueDate: String) {
         updateRow(rowId) { it.copy(intent = it.intent.copy(dueDate = dueDate.takeIf { d -> d.isNotBlank() })) }
+    }
+
+    /**
+     * Sets what kind of project a create_project row will build.
+     *
+     * Editable rather than merely displayed because the classifier is allowed to answer "I could
+     * not tell" — and because the consequence lands in files the user will not see until an agent
+     * has already been told to write the wrong stack.
+     */
+    fun onConfirmationProjectTypeChange(rowId: Int, type: ProjectType) {
+        updateRow(rowId) { it.copy(intent = it.intent.copy(projectType = type)) }
     }
 
     /** Ticks (or unticks) the separate acknowledgement a destructive row needs. */

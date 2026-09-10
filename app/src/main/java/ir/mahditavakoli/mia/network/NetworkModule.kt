@@ -8,6 +8,7 @@ import ir.mahditavakoli.mia.data.repository.AgentTeamFiles
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.data.repository.TeamFilesUpdater
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
@@ -54,62 +55,119 @@ object NetworkModule {
     }
 
     /**
-     * The bundled files uploaded to every new repo, mapping each asset to its repo-relative
-     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the PO brief
-     * decomposer, the QC pull-request gate, the shared provider/key module every role script
-     * calls, the token-spend
-     * reporter, the add-to-project and CI workflows, the Pages publisher that puts a web
-     * product's live URL on the repo, and AGENTS.md — the conventions file every agent prompt
-     * injects, which is why it is the one asset that lands at the repo root rather than under
-     * .github/. Together they stand up the whole free-model AI team.
+     * One bundled asset: the file in `assets/`, where it lands in a new repo, and which kinds of
+     * project get it.
      *
-     * The four `design-*.kt` assets are the odd ones out: they are not part of the team at all but
-     * the design system the team is expected to build UI from, and they land in the app's own
-     * source tree under a fixed `mia.design` package — fixed because MIA cannot know what package
-     * a repo it just created will end up using.
+     * [type] is what makes the bootstrap type-aware. `null` means "every project" — that is every
+     * file under `.github/`, and it is null rather than "all three types" on purpose: those
+     * workflows already detect what they are looking at (`ci.yml` checks for `gradlew` before it
+     * builds, `preview-web.yml` for a web entry point before it publishes), so they are not three
+     * variants that happen to be identical, they are one file that does not care.
+     *
+     * A non-null [type] means the file is only correct for that kind of project. Two things fall
+     * in there, and both used to be committed into every repo regardless:
+     *
+     * - `AGENTS.md`, injected into every PO/QC/TEC prompt. All three variants land at the same
+     *   repo path, which is exactly why the type has to be recorded here — the path alone can no
+     *   longer say which file belongs where.
+     * - the design system: four Compose files for Android, four CSS/HTML files for the web, and
+     *   deliberately none for [ProjectType.PLAIN].
+     *
+     * The readable twin of each file under `docs/github/` follows from these three fields, and
+     * `scripts/check-assets-sync.sh` derives it by parsing this list: a shared file mirrors the
+     * repo layout minus the `.github/` prefix, a typed one sits under its type's directory. That
+     * second half is what keeps the three `AGENTS.md` variants — identical repo paths, different
+     * contents — from overwriting each other in one folder. Registering an asset here is all it
+     * takes for the sync check to cover it, so the rule lives in the checker rather than being
+     * restated in Kotlin where nothing would read it.
      */
-    private val BOOTSTRAP_ASSETS = listOf(
-        "AGENTS.md" to "AGENTS.md",
-        "agent-issue-worker.yml" to ".github/workflows/agent-issue-worker.yml",
-        "ai-role-review.yml" to ".github/workflows/ai-role-review.yml",
-        "decompose-brief.yml" to ".github/workflows/decompose-brief.yml",
-        "qc-review.yml" to ".github/workflows/qc-review.yml",
-        "add-to-project.yml" to ".github/workflows/add-to-project.yml",
-        "ci.yml" to ".github/workflows/ci.yml",
-        "preview-web.yml" to ".github/workflows/preview-web.yml",
-        "ai-provider.js" to ".github/scripts/ai-provider.js",
-        "ai-role-review.js" to ".github/scripts/ai-role-review.js",
-        "po-rebrief.js" to ".github/scripts/po-rebrief.js",
-        "decompose-brief.js" to ".github/scripts/decompose-brief.js",
-        "qc-review.js" to ".github/scripts/qc-review.js",
-        "token-usage.js" to ".github/scripts/token-usage.js",
-        "design-tokens.kt" to "app/src/main/java/mia/design/Tokens.kt",
-        "design-theme.kt" to "app/src/main/java/mia/design/MiaTheme.kt",
-        "design-components.kt" to "app/src/main/java/mia/design/MiaComponents.kt",
-        "design-example.kt" to "app/src/main/java/mia/design/ExampleScreen.kt"
+    private data class Bundled(
+        val asset: String,
+        val repoPath: String,
+        val type: ProjectType? = null
     )
 
     /**
-     * Reads each bundled asset and pairs it with the path it should live at in a new repo, with
-     * the user's per-role model defaults written into it on the way out.
+     * Everything MIA can commit into a repo it creates, and who gets it.
      *
-     * The rewrite happens here rather than after the repo exists because the alternative is a
-     * repo that is briefly wrong: bootstrap, then a second pass of commits to move four roles
-     * onto the models the user already asked for — visible in the history, and a window in which
-     * a `@tec` typed straight after creation runs on the wrong model. The assets on disk are
-     * never touched; only the copy being uploaded.
+     * The team files — the TEC coding agent, the PO/QC advisor workflow + its script, the PO brief
+     * decomposer, the PO re-scoper, the QC pull-request gate, the shared provider/key module every
+     * role script calls, the token-spend reporter, the add-to-project and CI workflows, and the
+     * Pages publisher that puts a web product's live URL on the repo — stand up the whole
+     * free-model AI team and are identical on every kind of project.
+     *
+     * After them come the typed files. `AGENTS.md` is the one that matters most: it is short and it
+     * is injected into every agent prompt, so the Android copy telling an agent to run `./gradlew`
+     * is not a harmless extra file on a website — it is the first instruction the agent reads. The
+     * design systems follow the same logic; the Android one lands in a fixed `mia.design` package
+     * because MIA cannot know what package a repo it just created will end up using, and the web
+     * one lands in `src/styles/` as plain CSS custom properties so it is still correct after TEC
+     * scaffolds Vite, React, or nothing at all.
      */
-    fun readBootstrapFiles(): List<BootstrapFile> {
+    private val BOOTSTRAP_ASSETS = listOf(
+        Bundled("agent-issue-worker.yml", ".github/workflows/agent-issue-worker.yml"),
+        Bundled("ai-role-review.yml", ".github/workflows/ai-role-review.yml"),
+        Bundled("decompose-brief.yml", ".github/workflows/decompose-brief.yml"),
+        Bundled("qc-review.yml", ".github/workflows/qc-review.yml"),
+        Bundled("add-to-project.yml", ".github/workflows/add-to-project.yml"),
+        Bundled("ci.yml", ".github/workflows/ci.yml"),
+        Bundled("preview-web.yml", ".github/workflows/preview-web.yml"),
+        Bundled("ai-provider.js", ".github/scripts/ai-provider.js"),
+        Bundled("ai-role-review.js", ".github/scripts/ai-role-review.js"),
+        Bundled("po-rebrief.js", ".github/scripts/po-rebrief.js"),
+        Bundled("decompose-brief.js", ".github/scripts/decompose-brief.js"),
+        Bundled("qc-review.js", ".github/scripts/qc-review.js"),
+        Bundled("token-usage.js", ".github/scripts/token-usage.js"),
+
+        Bundled("agents-android.md", "AGENTS.md", ProjectType.ANDROID),
+        Bundled("design-tokens.kt", "app/src/main/java/mia/design/Tokens.kt", ProjectType.ANDROID),
+        Bundled("design-theme.kt", "app/src/main/java/mia/design/MiaTheme.kt", ProjectType.ANDROID),
+        Bundled("design-components.kt", "app/src/main/java/mia/design/MiaComponents.kt", ProjectType.ANDROID),
+        Bundled("design-example.kt", "app/src/main/java/mia/design/ExampleScreen.kt", ProjectType.ANDROID),
+
+        Bundled("agents-web.md", "AGENTS.md", ProjectType.WEB),
+        Bundled("web-tokens.css", "src/styles/tokens.css", ProjectType.WEB),
+        Bundled("web-theme.css", "src/styles/theme.css", ProjectType.WEB),
+        Bundled("web-components.css", "src/styles/components.css", ProjectType.WEB),
+        Bundled("web-example.html", "src/example.html", ProjectType.WEB),
+
+        Bundled("agents-plain.md", "AGENTS.md", ProjectType.PLAIN)
+    )
+
+    /**
+     * The `.github/` machinery, which is the same on every kind of project.
+     *
+     * Split out from [readBootstrapFiles] for [teamFilesUpdater]: it refreshes the team files in a
+     * repo that already exists, and the type of that repo is not something MIA recorded when it
+     * was created. Asking the registry for the untyped files answers the question without having
+     * to guess, and means the updater can no longer reach a typed file even by accident.
+     */
+    fun readTeamFiles(): List<BootstrapFile> = read(BOOTSTRAP_ASSETS.filter { it.type == null })
+
+    /**
+     * Everything a new [type] repo gets: the shared team files plus that type's own conventions
+     * and design system.
+     *
+     * The per-role model rewrite happens here rather than after the repo exists because the
+     * alternative is a repo that is briefly wrong: bootstrap, then a second pass of commits to
+     * move four roles onto the models the user already asked for — visible in the history, and a
+     * window in which a `@tec` typed straight after creation runs on the wrong model. The assets
+     * on disk are never touched; only the copy being uploaded.
+     */
+    fun readBootstrapFiles(type: ProjectType): List<BootstrapFile> =
+        read(BOOTSTRAP_ASSETS.filter { it.type == null || it.type == type })
+
+    private fun read(bundled: List<Bundled>): List<BootstrapFile> {
         val models = secretStore.defaultModels().filterKeys { it.envSuffix != null }
-        return BOOTSTRAP_ASSETS.map { (asset, path) ->
-            val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
-            val role = AgentTeamFiles.MODEL_BEARING_PATHS[path]
+        return bundled.map { file ->
+            val content = appContext.assets.open(file.asset).bufferedReader().use { it.readText() }
+            val role = AgentTeamFiles.MODEL_BEARING_PATHS[file.repoPath]
             val withModels = if (role == null) {
                 content
             } else {
                 AgentTeamFiles.applyRoleModels(content, models, role).text
             }
-            BootstrapFile(repoPath = path, content = withModels)
+            BootstrapFile(repoPath = file.repoPath, content = withModels)
         }
     }
 
@@ -134,7 +192,7 @@ object NetworkModule {
             api = gitHubApi,
             base64 = AndroidBase64Encoder,
             base64Decoder = AndroidBase64Decoder,
-            currentFiles = ::readBootstrapFiles,
+            currentFiles = ::readTeamFiles,
             migrator = agentModelMigrator
         )
     }

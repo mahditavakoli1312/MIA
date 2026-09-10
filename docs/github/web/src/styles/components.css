@@ -1,0 +1,459 @@
+/* Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/). */
+
+/*
+ * The components every page in this project is assembled from.
+ *
+ * These are the web twins of MIA's Android design system — `.mia-card` is `MiaCard`, `.mia-btn`
+ * is `MiaButton`, and so on — so a product with both an app and a site is recognisably one
+ * product. Read `src/example.html` before you build your first page: it is this whole file in
+ * use, in one document.
+ *
+ * They are plain classes on plain elements, not a framework. That is deliberate: whatever TEC
+ * scaffolds later — React, Vue, Astro, a single index.html — can put `class="mia-btn"` on its own
+ * markup, and none of it has to be rewritten when the stack changes.
+ *
+ * Two rules hold this together, and CI enforces the first one:
+ *   1. A page never writes a raw colour or a raw size. Everything below names a token from
+ *      tokens.css, and so must anything you add.
+ *   2. A component that can be interacted with is reachable by keyboard and says what it is to a
+ *      screen reader. Use a <button> for an action and an <a href> for a destination — never a
+ *      clickable <div>.
+ */
+
+/* --- Layout ------------------------------------------------------------------------------- */
+
+/*
+ * The page shell — the twin of `MiaScaffold`. One per page, wrapping everything.
+ *
+ * `min-height: 100dvh` rather than `100vh`: on mobile browsers the toolbar collapses as the
+ * visitor scrolls, and `vh` is frozen at the taller measurement, which leaves a strip of dead
+ * space at the bottom of every short page.
+ */
+.mia-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.mia-page__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-block-end: var(--divider-thickness) solid var(--color-outline);
+  background-color: var(--color-surface);
+}
+
+.mia-page__title {
+  font-size: var(--text-title-lg);
+  line-height: var(--text-title-lg-lh);
+  font-weight: var(--weight-semibold);
+  margin: 0;
+}
+
+.mia-page__body {
+  flex: 1;
+  width: 100%;
+  max-width: var(--page-max);
+  margin-inline: auto;
+  /* Side padding on one element, so no child has to remember the page gutter. */
+  padding: var(--space-lg);
+}
+
+/* Vertical rhythm between the blocks of a page, so no page invents its own gap. */
+.mia-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.mia-stack--tight {
+  gap: var(--space-sm);
+}
+
+/*
+ * A horizontal row of related things — the twin of `MiaRow`. It wraps rather than overflowing,
+ * because the alternative on a narrow screen is a horizontal scrollbar nobody asked for.
+ */
+.mia-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.mia-row--between {
+  justify-content: space-between;
+}
+
+/* --- Card --------------------------------------------------------------------------------- */
+
+.mia-card {
+  background-color: var(--color-surface);
+  border: var(--border-thickness) solid var(--color-outline);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elevation-card);
+  padding: var(--space-lg);
+}
+
+.mia-card--raised {
+  background-color: var(--color-surface-raised);
+  box-shadow: var(--elevation-sheet);
+}
+
+/* A card that is itself a link or a button. Everything else about it stays the same. */
+.mia-card--interactive {
+  display: block;
+  width: 100%;
+  text-align: start;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--motion-quick) var(--motion-easing),
+    transform var(--motion-quick) var(--motion-easing);
+}
+
+.mia-card--interactive:hover {
+  border-color: var(--color-primary);
+}
+
+.mia-card__title {
+  font-size: var(--text-title-md);
+  line-height: var(--text-title-md-lh);
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-xs);
+}
+
+.mia-card__body {
+  color: var(--color-on-surface-muted);
+  font-size: var(--text-body-md);
+  line-height: var(--text-body-md-lh);
+}
+
+/* --- Button ------------------------------------------------------------------------------- */
+
+/*
+ * The twin of `MiaButton`: `.mia-btn` plus exactly one of the three kinds. There is no fourth
+ * kind — a page that needs one is a page inventing a hierarchy the rest of the site does not
+ * have.
+ *
+ * `min-height: var(--touch-target)` is not decoration. A control smaller than 48px is one a
+ * thumb cannot reliably hit, and it is the single most common thing lost when a button is
+ * styled from scratch.
+ */
+.mia-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-height: var(--touch-target);
+  padding-inline: var(--space-lg);
+  border: var(--border-thickness) solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-label);
+  line-height: var(--text-label-lh);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--motion-quick) var(--motion-easing),
+    border-color var(--motion-quick) var(--motion-easing),
+    opacity var(--motion-quick) var(--motion-easing);
+}
+
+.mia-btn:disabled,
+.mia-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mia-btn--primary {
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.mia-btn--primary:hover:not(:disabled) {
+  background-color: var(--color-secondary);
+  color: var(--color-on-secondary);
+}
+
+.mia-btn--secondary {
+  background-color: transparent;
+  border-color: var(--color-outline);
+  color: var(--color-on-surface);
+}
+
+.mia-btn--secondary:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.mia-btn--danger {
+  background-color: var(--color-error);
+  color: var(--color-on-error);
+}
+
+.mia-btn--danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/*
+ * The spinner a button shows while its action is in flight. Put it INSIDE the button and mark the
+ * button `aria-busy="true"` — a button that is replaced by a spinner loses keyboard focus, and
+ * the visitor is dropped back at the top of the document.
+ */
+.mia-btn__spinner {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  border: 2px solid currentColor;
+  border-block-start-color: transparent;
+  border-radius: var(--radius-pill);
+  animation: mia-spin var(--motion-slow) linear infinite;
+}
+
+@keyframes mia-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Field -------------------------------------------------------------------------------- */
+
+/*
+ * The twin of `MiaTextField`. The error message is part of the component, not something a page
+ * draws underneath, so that a field can never be red without saying why — the single most common
+ * way a form becomes unusable.
+ *
+ * Markup:
+ *   <div class="mia-field">
+ *     <label class="mia-field__label" for="email">ایمیل</label>
+ *     <input class="mia-field__input" id="email" aria-describedby="email-msg">
+ *     <p class="mia-field__message" id="email-msg">…</p>
+ *   </div>
+ */
+.mia-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.mia-field__label {
+  font-size: var(--text-label-sm);
+  line-height: var(--text-label-sm-lh);
+  color: var(--color-on-surface-muted);
+}
+
+.mia-field__input,
+.mia-field__textarea,
+.mia-field__select {
+  width: 100%;
+  min-height: var(--touch-target);
+  padding: var(--space-sm) var(--space-md);
+  background-color: var(--color-surface);
+  color: var(--color-on-surface);
+  border: var(--border-thickness) solid var(--color-outline);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--motion-quick) var(--motion-easing);
+}
+
+.mia-field__textarea {
+  min-height: calc(var(--touch-target) * 2);
+  resize: vertical;
+}
+
+.mia-field__input::placeholder,
+.mia-field__textarea::placeholder {
+  color: var(--color-on-surface-muted);
+}
+
+.mia-field__input:hover,
+.mia-field__textarea:hover {
+  border-color: var(--color-on-surface-muted);
+}
+
+.mia-field__message {
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm-lh);
+  color: var(--color-on-surface-muted);
+  margin: 0;
+}
+
+/*
+ * The error state, driven by `aria-invalid="true"` on the input rather than by an extra class.
+ * One attribute then does both jobs — it is what a screen reader announces AND what turns the
+ * field red — so the two can never disagree.
+ */
+.mia-field__input[aria-invalid="true"],
+.mia-field__textarea[aria-invalid="true"],
+.mia-field__select[aria-invalid="true"] {
+  border-color: var(--color-error);
+}
+
+.mia-field:has([aria-invalid="true"]) .mia-field__message {
+  color: var(--color-error);
+}
+
+/* --- Chip --------------------------------------------------------------------------------- */
+
+.mia-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  background-color: var(--color-surface-raised);
+  color: var(--color-on-surface-muted);
+  border: var(--border-thickness) solid var(--color-outline);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-label-sm);
+  line-height: var(--text-label-sm-lh);
+}
+
+.mia-chip--accent {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+/* --- The four states every page owes its visitor ------------------------------------------ */
+
+/*
+ * Loading, empty, error-with-retry, content. A page that only renders the happy path is not
+ * finished — the other three are what the visitor actually sees on a slow connection, on their
+ * first visit, and when something breaks.
+ */
+
+/* Loading: the skeleton, for when the shape of what is coming is already known. */
+.mia-skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface) 0%,
+    var(--color-surface-raised) 50%,
+    var(--color-surface) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: mia-shimmer 1.2s linear infinite;
+}
+
+.mia-skeleton--text {
+  height: var(--text-body-md-lh);
+  margin-block-end: var(--space-sm);
+}
+
+.mia-skeleton--title {
+  height: var(--text-title-lg-lh);
+  width: 60%;
+  margin-block-end: var(--space-md);
+}
+
+.mia-skeleton--block {
+  height: calc(var(--touch-target) * 2);
+}
+
+@keyframes mia-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Loading: the spinner, for when it is not. */
+.mia-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-2xl);
+  color: var(--color-on-surface-muted);
+}
+
+.mia-loading__spinner {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+  border: 2px solid var(--color-outline);
+  border-block-start-color: var(--color-primary);
+  border-radius: var(--radius-pill);
+  animation: mia-spin var(--motion-slow) linear infinite;
+}
+
+/* Empty: "nothing here yet". A page without one looks broken when it is merely empty. */
+.mia-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-2xl);
+  text-align: center;
+}
+
+.mia-empty__title {
+  font-size: var(--text-title-md);
+  line-height: var(--text-title-md-lh);
+  font-weight: var(--weight-medium);
+  margin: 0;
+}
+
+.mia-empty__description {
+  color: var(--color-on-surface-muted);
+  margin: 0;
+}
+
+/*
+ * Error: always with a way out. An error that only says what went wrong leaves the visitor on a
+ * dead page, so the retry action is part of the component rather than optional decoration.
+ * Put `role="alert"` on it and a screen reader announces it without the visitor hunting for it.
+ */
+.mia-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+  background-color: var(--color-error-container);
+  border: var(--border-thickness) solid var(--color-error);
+  border-radius: var(--radius-md);
+  color: var(--color-on-surface);
+}
+
+.mia-error__title {
+  font-size: var(--text-title-sm);
+  line-height: var(--text-title-sm-lh);
+  font-weight: var(--weight-medium);
+  color: var(--color-error);
+  margin: 0;
+}
+
+.mia-error__message {
+  margin: 0;
+}
+
+/* --- Utilities ---------------------------------------------------------------------------- */
+
+/*
+ * Visible to a screen reader, invisible on screen. For the label a sighted visitor gets from an
+ * icon and everyone else gets from nothing at all. `display: none` would hide it from both.
+ */
+.mia-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * A block that must run left-to-right inside an RTL page: code, a URL, an English identifier, a
+ * table of numbers. This is the ONLY correct way to change direction — never on a page.
+ */
+.mia-ltr {
+  direction: ltr;
+  text-align: start;
+  unicode-bidi: isolate;
+}
+
+/* A table wide enough to need its own scroller, so the page body never scrolls sideways. */
+.mia-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}

@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.network.github.CreateLabelBody
 import ir.mahditavakoli.mia.network.github.CreateRepoBody
 import ir.mahditavakoli.mia.network.github.GenerateFromTemplateBody
@@ -59,7 +60,8 @@ class RepoBootstrapper(
     private val api: GitHubApi,
     private val base64: Base64Encoder,
     private val encryptor: SecretEncryptor,
-    private val files: () -> List<BootstrapFile>,
+    /** The files a new repo of a given kind gets — see [ProjectType]. */
+    private val files: (ProjectType) -> List<BootstrapFile>,
     private val templateRepo: String = MIA_TEMPLATE_REPO
 ) {
 
@@ -75,6 +77,9 @@ class RepoBootstrapper(
      * @param miniMaxApiKey the MiniMax platform key, stored so that switching this repo to a
      *        MiniMax model in the picker later just works. Optional and non-fatal: a repo on a
      *        free OpenRouter model never reads it.
+     * @param projectType what kind of product this repo will hold, which decides the conventions
+     *        file and the design system that land in it. The `.github/` machinery does not vary:
+     *        those workflows detect what they are looking at on their own.
      */
     suspend fun bootstrap(
         owner: String,
@@ -83,7 +88,8 @@ class RepoBootstrapper(
         private: Boolean,
         agentApiKey: String?,
         agentFallbackApiKey: String? = null,
-        miniMaxApiKey: String? = null
+        miniMaxApiKey: String? = null,
+        projectType: ProjectType = ProjectType.DEFAULT
     ): Result {
         val useTemplate = templateRepo.isNotBlank()
         val repo = if (useTemplate) {
@@ -111,8 +117,9 @@ class RepoBootstrapper(
         if (!useTemplate) {
             // Read per bootstrap, not once at construction: the files carry the per-role model
             // defaults the user has chosen, and those can change between two projects being
-            // created without the app being restarted.
-            for (file in files()) {
+            // created without the app being restarted — and the set itself now depends on the
+            // kind of project being created.
+            for (file in files(projectType)) {
                 runCatching {
                     val response = api.putContent(
                         owner = owner,

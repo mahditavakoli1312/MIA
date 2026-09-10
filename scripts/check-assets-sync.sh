@@ -10,6 +10,12 @@
 # The pair list is DERIVED from NetworkModule.BOOTSTRAP_ASSETS rather than repeated here: a list
 # maintained by hand is one more thing to forget when an asset is added, which is the exact
 # failure this guards against.
+#
+# Each registry entry is `Bundled("asset", "repo/path")` for a file every project gets, or
+# `Bundled("asset", "repo/path", ProjectType.X)` for one only a web / android / plain project
+# gets. The docs twin follows from that: a shared file mirrors the repo layout minus the
+# `.github/` prefix, and a typed one lives under its type's directory — which is what stops the
+# three different AGENTS.md files from colliding in a single folder.
 set -uo pipefail
 
 module="app/src/main/java/ir/mahditavakoli/mia/network/NetworkModule.kt"
@@ -21,12 +27,14 @@ if [ ! -f "$module" ]; then
   exit 1
 fi
 
-# "asset-name" to ".github/path/in/the/new/repo"  →  two space-separated fields.
+# asset-name, repo path, and the project type (or "-" for a file every project gets)
+# →  three space-separated fields.
 pairs="$(
   awk '/BOOTSTRAP_ASSETS = listOf\(/ { inside = 1; next }
        inside && /^[[:space:]]*\)/     { inside = 0 }
        inside                          { print }' "$module" \
-  | sed -n 's/^[[:space:]]*"\([^"]*\)"[[:space:]]*to[[:space:]]*"\([^"]*\)".*/\1 \2/p'
+  | sed -n -e 's/^[[:space:]]*Bundled("\([^"]*\)",[[:space:]]*"\([^"]*\)",[[:space:]]*ProjectType\.\([A-Z]*\)).*/\1 \2 \3/p' \
+           -e 's/^[[:space:]]*Bundled("\([^"]*\)",[[:space:]]*"\([^"]*\)").*/\1 \2 -/p'
 )"
 
 if [ -z "$pairs" ]; then
@@ -36,11 +44,19 @@ fi
 
 failed=0
 checked=""
-while read -r asset repo_path; do
+while read -r asset repo_path type; do
   [ -n "$asset" ] || continue
-  # docs/github/ mirrors the repo layout minus the .github/ prefix, so .github/scripts/x.js
-  # lives at docs/github/scripts/x.js and a root file like AGENTS.md at docs/github/AGENTS.md.
-  doc_path="$docs_dir/${repo_path#.github/}"
+  # A shared file mirrors the repo layout minus the .github/ prefix, so .github/scripts/x.js lives
+  # at docs/github/scripts/x.js. A typed one goes under its type's directory, because all three
+  # AGENTS.md variants land at the same path in a repo and would otherwise overwrite each other
+  # here: docs/github/web/AGENTS.md, docs/github/android/app/src/…/Tokens.kt, and so on.
+  if [ "$type" = "-" ]; then
+    doc_path="$docs_dir/${repo_path#.github/}"
+  else
+    # ProjectType.WEB → web. The enum name is upper-case; the directory is the id, which is the
+    # same word in lower case.
+    doc_path="$docs_dir/$(printf '%s' "$type" | tr '[:upper:]' '[:lower:]')/$repo_path"
+  fi
   asset_path="$assets_dir/$asset"
   checked="$checked $doc_path"
 
@@ -50,7 +66,7 @@ while read -r asset repo_path; do
     continue
   fi
   if [ ! -f "$doc_path" ]; then
-    echo "✗ $doc_path is missing. Copy it: cp $asset_path $doc_path" >&2
+    echo "✗ $doc_path is missing. Copy it: mkdir -p $(dirname "$doc_path") && cp $asset_path $doc_path" >&2
     failed=1
     continue
   fi

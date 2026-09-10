@@ -3,6 +3,7 @@ package ir.mahditavakoli.mia.data.repository
 import ir.mahditavakoli.mia.data.model.IssueComment
 import ir.mahditavakoli.mia.data.model.IssueLabels
 import ir.mahditavakoli.mia.data.model.IssueList
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.data.model.TokenUsage
 import ir.mahditavakoli.mia.network.github.CreateCommentBody
@@ -54,7 +55,16 @@ class GitHubRepository(
     @Volatile
     private var cachedOwner: String? = null
 
-    suspend fun createRepoForProject(projectName: String): Result<RepoBootstrapper.Result> = runCatching {
+    /**
+     * @param projectType what the repo is going to hold. It picks the conventions file every
+     *        agent prompt injects and the design system the team builds UI from, so getting it
+     *        wrong is not cosmetic — a web repo bootstrapped as Android tells its own agents to
+     *        write Jetpack Compose.
+     */
+    suspend fun createRepoForProject(
+        projectName: String,
+        projectType: ProjectType = ProjectType.DEFAULT
+    ): Result<RepoBootstrapper.Result> = runCatching {
         bootstrapper.bootstrap(
             owner = owner(),
             name = repoNameFor(projectName),
@@ -62,7 +72,8 @@ class GitHubRepository(
             private = createPrivate,
             agentApiKey = agentApiKeyProvider(),
             agentFallbackApiKey = agentFallbackApiKeyProvider(),
-            miniMaxApiKey = miniMaxApiKeyProvider()
+            miniMaxApiKey = miniMaxApiKeyProvider(),
+            projectType = projectType
         )
     }
 

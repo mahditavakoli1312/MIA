@@ -33,34 +33,56 @@ jobs:
           java-version: '17'
 
       # The design-system rule, enforced rather than documented. A screen that writes its own
-      # colours and spacing is how a generated app ends up looking like four people built it, and
-      # it is the single most common thing a small model does when nobody checks.
+      # colours and spacing is how a generated product ends up looking like four people built it,
+      # and it is the single most common thing a small model does when nobody checks.
       #
-      # Only *Screen.kt is checked, and the design module itself is exempt: raw values are exactly
-      # what a token file is for.
-      - name: Lint screens for raw colours and sizes
+      # Both design systems are checked by the same step, because a repo has whichever one it has
+      # and neither check costs anything when its files are absent. The Android half looks at
+      # *Screen.kt, the web half at page and component styles; each design module is exempt from
+      # its own check, since raw values are exactly what a token file is for.
+      - name: Lint for raw colours and sizes
         run: |
+          colors=""
+          sizes=""
+          guidance=""
+
+          # --- Android: Compose screens ------------------------------------------------------
           screens="$(git ls-files '*Screen.kt' | grep -v '/mia/design/' || true)"
-          if [ -z "$screens" ]; then
-            echo "No screens yet — nothing to check."
-            exit 0
+          if [ -n "$screens" ]; then
+            # `[^A-Za-z0-9_.]` before the digits so `Spacing.md` and `Sizes.iconSm` don't match,
+            # and a bare `16.dp` does.
+            colors="$colors$(grep -nE 'Color\(0x|Color\.(Red|Green|Blue|Yellow|Cyan|Magenta|White|Black|Gray|LightGray|DarkGray)' $screens || true)"
+            sizes="$sizes$(grep -nE '(^|[^A-Za-z0-9_.])[0-9]+(\.[0-9]+)?\.(dp|sp)' $screens || true)"
+            guidance="${guidance}Kotlin: use MaterialTheme.colorScheme.* for colour and the tokens in app/src/main/java/mia/design/Tokens.kt (Spacing, Radius, Sizes, Elevation, Motion) for every number. Build screens from the components in MiaComponents.kt."$'\n'
           fi
 
-          # `[^A-Za-z0-9_.]` before the digits so `Spacing.md` and `Sizes.iconSm` don't match, and
-          # a bare `16.dp` does.
-          colors="$(grep -nE 'Color\(0x|Color\.(Red|Green|Blue|Yellow|Cyan|Magenta|White|Black|Gray|LightGray|DarkGray)' $screens || true)"
-          sizes="$(grep -nE '(^|[^A-Za-z0-9_.])[0-9]+(\.[0-9]+)?\.(dp|sp)' $screens || true)"
+          # --- Web: page and component styles ------------------------------------------------
+          # src/styles/ is the design system itself and is exempt. So is anything generated or
+          # vendored — a bundled stylesheet is not something an agent wrote.
+          styles="$(git ls-files '*.css' '*.scss' | grep -v '^src/styles/' | grep -vE '(^|/)(dist|build|node_modules|vendor)/' || true)"
+          if [ -n "$styles" ]; then
+            # A raw hex or rgb()/hsl() literal anywhere in a page stylesheet. The tokens file is
+            # the only place those belong.
+            colors="$colors$(grep -nE '#[0-9a-fA-F]{3,8}\b|\b(rgba?|hsla?)\(' $styles || true)"
+            # A bare length: `16px`, `1.5rem`. `var(--space-lg)` has no digits to match, and a
+            # 0 with no unit is not a magic number.
+            sizes="$sizes$(grep -nE '(^|[^A-Za-z0-9_.#-])[0-9]+(\.[0-9]+)?(px|rem|em)\b' $styles || true)"
+            guidance="${guidance}CSS: use the custom properties in src/styles/tokens.css for every colour and every number (--color-*, --space-*, --radius-*, --text-*, --motion-*). Build pages from the classes in src/styles/components.css. See src/example.html."$'\n'
+          fi
 
+          if [ -z "$screens" ] && [ -z "$styles" ]; then
+            echo "No screens or page styles yet — nothing to check."
+            exit 0
+          fi
           if [ -z "$colors" ] && [ -z "$sizes" ]; then
-            echo "All screens use the design system."
+            echo "Everything uses the design system."
             exit 0
           fi
           {
-            echo "::error::A screen is writing raw colours or sizes instead of using the design system."
+            echo "::error::A screen or page style is writing raw colours or sizes instead of using the design system."
+            printf '%s\n' "$guidance"
             echo
-            echo "Use MaterialTheme.colorScheme.* for colour and the tokens in"
-            echo "app/src/main/java/mia/design/Tokens.kt (Spacing, Radius, Sizes, Elevation, Motion)"
-            echo "for every number. Build screens from the components in MiaComponents.kt."
+            echo "If a token you need is missing, add it to the token file — never inline the value."
             echo
             if [ -n "$colors" ]; then
               echo "Raw colours:"

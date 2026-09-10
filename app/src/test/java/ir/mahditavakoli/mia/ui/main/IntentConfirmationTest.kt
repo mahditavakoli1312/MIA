@@ -1,6 +1,7 @@
 package ir.mahditavakoli.mia.ui.main
 
 import ir.mahditavakoli.mia.data.model.ActionType
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.data.model.VoiceCommandIntent
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,12 +14,20 @@ import org.junit.Test
  */
 class IntentConfirmationTest {
 
-    private fun row(id: Int, action: ActionType, acknowledged: Boolean = false) = ConfirmableIntent(
+    private fun row(
+        id: Int,
+        action: ActionType,
+        acknowledged: Boolean = false,
+        // Typed by default so the destructive-acknowledgement tests below are testing only that.
+        // The untyped case has its own tests.
+        projectType: ProjectType? = ProjectType.WEB.takeIf { action == ActionType.CREATE_PROJECT }
+    ) = ConfirmableIntent(
         id = id,
         intent = VoiceCommandIntent(
             actionType = action,
             projectName = "وبسایت",
-            taskTitle = "طراحی لوگو".takeIf { action != ActionType.CREATE_PROJECT }
+            taskTitle = "طراحی لوگو".takeIf { action != ActionType.CREATE_PROJECT },
+            projectType = projectType
         ),
         isAcknowledged = acknowledged
     )
@@ -68,5 +77,52 @@ class IntentConfirmationTest {
     @Test
     fun `an empty batch has nothing to run`() {
         assertFalse(confirmation().canExecute)
+    }
+
+    // The project type ------------------------------------------------------------------------
+    //
+    // The choice decides which AGENTS.md is committed into the new repo, and AGENTS.md is
+    // injected into every agent prompt there. Defaulting it silently would mean a website whose
+    // agents were told to write Jetpack Compose, with nothing later in the flow to catch it — so
+    // the sheet blocks instead, exactly as it does for a destructive row.
+
+    @Test
+    fun `a create_project the classifier could not type blocks the batch`() {
+        val state = confirmation(row(0, ActionType.CREATE_PROJECT, projectType = null))
+
+        assertTrue(state.rows.single().needsProjectType)
+        assertFalse(state.canExecute)
+    }
+
+    @Test
+    fun `picking a type unblocks it`() {
+        for (type in ProjectType.entries) {
+            val state = confirmation(row(0, ActionType.CREATE_PROJECT, projectType = type))
+
+            assertFalse("$type should not need a type", state.rows.single().needsProjectType)
+            assertTrue("$type should run", state.canExecute)
+        }
+    }
+
+    @Test
+    fun `one untyped new project blocks a batch that is otherwise ready`() {
+        val state = confirmation(
+            row(0, ActionType.CREATE_PROJECT, projectType = null),
+            row(1, ActionType.ADD_TASK),
+            row(2, ActionType.COMPLETE_TASK)
+        )
+
+        assertFalse(state.canExecute)
+    }
+
+    @Test
+    fun `only create_project needs a type`() {
+        // Every other action names a repo that already exists and already made this choice, so a
+        // null there is the correct value and must never block.
+        for (action in ActionType.entries.filter { it != ActionType.CREATE_PROJECT }) {
+            val row = row(0, action, acknowledged = true, projectType = null)
+
+            assertFalse("$action should not need a type", row.needsProjectType)
+        }
     }
 }

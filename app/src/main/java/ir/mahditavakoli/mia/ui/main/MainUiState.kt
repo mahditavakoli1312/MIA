@@ -38,6 +38,18 @@ data class ConfirmableIntent(
     val isDestructive: Boolean
         get() = intent.actionType == ActionType.DELETE_PROJECT ||
             intent.actionType == ActionType.REMOVE_TASK
+
+    /**
+     * A create_project row the classifier could not type, which the user has to answer before the
+     * batch can run.
+     *
+     * Blocking rather than defaulting to Android: the choice decides the `AGENTS.md` every agent
+     * prompt in that repo will inject, so a silent default is a repo whose agents were told to
+     * build the wrong thing — and nothing later in the flow surfaces that. One tap is a much
+     * smaller cost than finding out from the first pull request.
+     */
+    val needsProjectType: Boolean
+        get() = intent.actionType == ActionType.CREATE_PROJECT && intent.projectType == null
 }
 
 /**
@@ -61,9 +73,14 @@ data class IntentConfirmation(
     /** True from the moment the user confirms until execution lands. */
     val isExecuting: Boolean = false
 ) {
-    /** Every destructive row must be ticked on its own before the whole batch can run. */
+    /**
+     * Every destructive row must be ticked on its own, and every new project must know what it
+     * is, before the whole batch can run.
+     */
     val canExecute: Boolean
-        get() = !isExecuting && rows.isNotEmpty() && rows.all { !it.isDestructive || it.isAcknowledged }
+        get() = !isExecuting && rows.isNotEmpty() &&
+            rows.all { !it.isDestructive || it.isAcknowledged } &&
+            rows.none { it.needsProjectType }
 
     val intents: List<VoiceCommandIntent> get() = rows.map { it.intent }
 }

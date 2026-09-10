@@ -309,6 +309,7 @@ fun MainScreen(
                 onTitleChange = viewModel::onConfirmationTitleChange,
                 onDueDateChange = viewModel::onConfirmationDueDateChange,
                 onAcknowledgeChange = viewModel::onConfirmationAcknowledgeChange,
+                onProjectTypeChange = viewModel::onConfirmationProjectTypeChange,
                 onConfirm = viewModel::onConfirmationConfirm,
                 onDismiss = viewModel::onConfirmationDismiss
             )

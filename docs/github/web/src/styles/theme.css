@@ -1,0 +1,264 @@
+/* Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/). */
+
+/*
+ * The theme: colours, type and writing direction, applied once to the whole document.
+ *
+ * The visual language is MIA's own — a near-black canvas with neon accents — so a project MIA
+ * generated looks like MIA made it. Dark-first is a decision, not a default: the accents only
+ * work against a fixed dark ground.
+ *
+ * Import order matters. tokens.css defines the scale this file paints with:
+ *
+ *   @import "./tokens.css";
+ *   @import "./theme.css";
+ *   @import "./components.css";
+ *
+ * Colour roles are named after their JOB, never their appearance. `--color-primary`, not
+ * `--color-green`: the light theme below repaints every one of these, and a page that asked for
+ * green would still be green on a white ground where it is unreadable.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  /* --- Neon accents ------------------------------------------------------------------------
+   * The call to action, active states, anything that should catch the eye. */
+  --color-primary: #39ff14;
+  --color-on-primary: #0a0b0d;
+  --color-secondary: #00f0ff;
+  --color-on-secondary: #0a0b0d;
+
+  /* Dimmed pair, for the light theme and for anything that must not shout. */
+  --color-primary-dim: #1f8f0b;
+  --color-secondary-dim: #0090a0;
+
+  /* --- Surfaces ----------------------------------------------------------------------------
+   * Near-black: a true dark theme, not a dimmed light one. */
+  --color-background: #0a0b0d;
+  --color-surface: #14161a;
+  --color-surface-raised: #1c1f24;
+  --color-outline: #2a2e35;
+
+  /* --- Content ----------------------------------------------------------------------------- */
+  --color-on-background: #e6e8eb;
+  --color-on-surface: #e6e8eb;
+  --color-on-surface-muted: #9aa1ac;
+
+  /* --- Status ------------------------------------------------------------------------------ */
+  --color-error: #ff5252;
+  --color-on-error: #0a0b0d;
+  --color-error-container: #2a1214;
+  --color-success: #39ff14;
+  --color-warning: #ffb020;
+
+  /* The ring drawn around whatever has keyboard focus. Never remove it; restyle it if you must. */
+  --color-focus-ring: var(--color-secondary);
+}
+
+/*
+ * Present so a visitor whose system is in light mode is still served something legible, not
+ * because this design is meant to be light. The neon pair is swapped for its dimmed twin: #39ff14
+ * on white is invisible, and an accent nobody can read is not an accent.
+ *
+ * Two ways in, and both are needed. `prefers-color-scheme` is the visitor's system setting, and
+ * `[data-theme]` on <html> is an explicit choice a toggle can make — which has to win in BOTH
+ * directions, so the dark block below restores the dark palette for a visitor whose system is
+ * light but who asked for dark.
+ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --color-primary: var(--color-primary-dim);
+    --color-on-primary: #ffffff;
+    --color-secondary: var(--color-secondary-dim);
+    --color-on-secondary: #ffffff;
+
+    --color-background: #fbfbfc;
+    --color-surface: #ffffff;
+    --color-surface-raised: #f2f3f5;
+    --color-outline: #d8dbe0;
+
+    --color-on-background: #14161a;
+    --color-on-surface: #14161a;
+    --color-on-surface-muted: #5c636e;
+
+    --color-error: #c62828;
+    --color-on-error: #ffffff;
+    --color-error-container: #fdecec;
+
+    --elevation-card: 0 1px 2px rgb(16 20 26 / 0.10);
+    --elevation-sheet: 0 6px 20px rgb(16 20 26 / 0.14);
+  }
+}
+
+[data-theme="light"] {
+  --color-primary: var(--color-primary-dim);
+  --color-on-primary: #ffffff;
+  --color-secondary: var(--color-secondary-dim);
+  --color-on-secondary: #ffffff;
+
+  --color-background: #fbfbfc;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f2f3f5;
+  --color-outline: #d8dbe0;
+
+  --color-on-background: #14161a;
+  --color-on-surface: #14161a;
+  --color-on-surface-muted: #5c636e;
+
+  --color-error: #c62828;
+  --color-on-error: #ffffff;
+  --color-error-container: #fdecec;
+
+  --elevation-card: 0 1px 2px rgb(16 20 26 / 0.10);
+  --elevation-sheet: 0 6px 20px rgb(16 20 26 / 0.14);
+}
+
+/* --- Reset ---------------------------------------------------------------------------------
+ * The smallest one that removes the differences worth removing. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+ul[class],
+ol[class] {
+  list-style: none;
+  padding: 0;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/*
+ * RTL is set HERE and nowhere else, on <html dir="rtl">. A component that re-applies it is either
+ * redundant or is fighting the root, and both end in a layout that mirrors twice and comes out
+ * LTR again. Give a *specific block* the other direction when it needs one — code, a table of
+ * English identifiers, a URL — never a page.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: var(--color-background);
+  color: var(--color-on-background);
+  font-family: var(--font-family);
+  font-size: var(--text-body-md);
+  line-height: var(--text-body-md-lh);
+  font-weight: var(--weight-regular);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Type ----------------------------------------------------------------------------------- */
+
+h1 {
+  font-size: var(--text-headline);
+  line-height: var(--text-headline-lh);
+  font-weight: var(--weight-bold);
+}
+
+h2 {
+  font-size: var(--text-title-lg);
+  line-height: var(--text-title-lg-lh);
+  font-weight: var(--weight-semibold);
+}
+
+h3 {
+  font-size: var(--text-title-md);
+  line-height: var(--text-title-md-lh);
+  font-weight: var(--weight-medium);
+}
+
+h4 {
+  font-size: var(--text-title-sm);
+  line-height: var(--text-title-sm-lh);
+  font-weight: var(--weight-medium);
+}
+
+p {
+  max-width: var(--measure);
+}
+
+a {
+  color: var(--color-secondary);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--color-primary);
+}
+
+small,
+.text-muted {
+  font-size: var(--text-body-sm);
+  line-height: var(--text-body-sm-lh);
+  color: var(--color-on-surface-muted);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-family-mono);
+  font-size: 0.9em;
+  /* Code is Latin and must not be mirrored, whatever direction the page runs in. */
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/*
+ * One focus ring for the whole site, on keyboard focus only. `:focus-visible` rather than
+ * `:focus` so a mouse click does not leave a ring behind — and never `outline: none` without a
+ * replacement, which is how a site becomes unusable without a mouse.
+ */
+:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * Respect a visitor who has asked their system for less movement. This one block covers every
+ * animation and transition on the site, so no component has to remember to.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

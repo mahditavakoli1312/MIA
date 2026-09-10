@@ -2,6 +2,7 @@ package ir.mahditavakoli.mia.data.repository
 
 import ir.mahditavakoli.mia.data.model.ActionType
 import ir.mahditavakoli.mia.data.model.Project
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.data.model.RepoIssue
 import ir.mahditavakoli.mia.data.model.Task
 import ir.mahditavakoli.mia.data.model.TokenUsage
@@ -121,7 +122,13 @@ class IntentExecutionRepository(
         api.createProject(CreateProjectBody(name = intent.projectName))
         val base = "پروژه «${intent.projectName}» ساخته شد"
         if (!gitHub.isConfigured) return base
-        return gitHub.createRepoForProject(intent.projectName).fold(
+        // A command that did not say what kind of project this is has already been through the
+        // confirmation sheet, where the user picked one; DEFAULT is only ever reached by a caller
+        // that bypasses the sheet entirely.
+        return gitHub.createRepoForProject(
+            projectName = intent.projectName,
+            projectType = intent.projectType ?: ProjectType.DEFAULT
+        ).fold(
             onSuccess = { result ->
                 val created = "$base و ریپازیتوری «${result.repo.name}» در گیت‌هاب ایجاد شد"
                 // Repo exists, but some agent-wiring step (workflow/label/secret) may have failed.
