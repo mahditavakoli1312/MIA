@@ -546,6 +546,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           # The PO's seat, not TEC's — re-scoping is the same job `@po` does on an issue.
           AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
           AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
@@ -594,6 +598,10 @@ jobs:
           # Non-empty when the checkout above landed on TEC's own previous attempt rather than
           # on the default branch. It changes what the prompt can honestly claim is in the tree.
           RESUME_BRANCH: ${{ steps.claim.outputs.resume }}
+          # Read only by skills.js, and only to decide whether the GLM vision/OCR/image skills
+          # are offered at all: a procedure whose key is not configured is a failed attempt and
+          # a confused comment, so an unset secret removes it from the list instead.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
         run: |
           prompt="${RUNNER_TEMP}/agent-prompt.txt"
 
@@ -713,6 +721,21 @@ jobs:
               break
             fi
           done
+
+          # The skills this repository installs for TEC, chosen for THIS issue.
+          #
+          # AGENTS.md above is what TEC is told on every issue, and it is capped at ~120 lines for
+          # exactly that reason. Skills are the other half: the long procedures — how a screen is
+          # assembled here, how to read a screenshot somebody attached — that are decisive on the
+          # issue they apply to and pure noise on the other nine. skills.js prints a one-line index
+          # of everything installed plus the full body of the few that matched the issue text, and
+          # prints NOTHING when the repo has no skills, which is every repo bootstrapped before it
+          # existed. So this is appended unconditionally and guarded only on the file being there.
+          if [ -f .github/scripts/skills.js ]; then
+            node .github/scripts/skills.js --role tec \
+              --text-file "${RUNNER_TEMP}/issue-title.txt,${RUNNER_TEMP}/issue-body.txt" \
+              >> "$prompt" || echo "::warning::The skill block could not be built; continuing without it."
+          fi
 
           # QC's objections, when this issue is coming back from the gate. They go AFTER the
           # rules and BEFORE the issue, because they are the diff between what was asked for and
@@ -1202,6 +1225,10 @@ jobs:
           # Read only when AGENT_PROVIDER is "minimax". The MIA app pushes it alongside the
           # OpenRouter one, so switching provider needs no visit to GitHub's own settings.
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL_TEC || vars.AGENT_MODEL || 'openrouter/minimax/minimax-m3:free' }}
           # Optional: "model-a,model-b" tries model-b when model-a cannot produce a build that
           # compiles. All of them must be served by AGENT_PROVIDER.
@@ -1452,6 +1479,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           # QC's own model and provider — role-scoped names, so they sit next to the
           # AGENT_MODEL below (the ladder's winning model, which the PR body reports) without
           # colliding with it, and so this gate can run on a different model than the agent
@@ -1755,6 +1786,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
           AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
           # How many times one brief may be attempted before the PO must rewrite it.

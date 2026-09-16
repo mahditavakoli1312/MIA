@@ -44,6 +44,7 @@ jobs:
       # The handoff invariant: every state has an owner and an exit, every label is a state
       # somebody watches, and no role can post a message without naming who acts next. A hole in
       # any of those produces no error at runtime — an issue just stops moving — so it has to be
-      # caught here.
+      # caught here. The same run covers the skill layer, which is quiet in the same way: a
+      # malformed SKILL.md is skipped rather than reported, and a seat silently loses a procedure.
       - name: Check that the agent loop cannot leave a task stranded
         run: ./scripts/check-loop-closure.sh

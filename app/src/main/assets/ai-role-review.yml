@@ -78,6 +78,10 @@ jobs:
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           # Read only when AGENT_PROVIDER is "minimax".
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           # A model PER ROLE. @po and @qc answer the same comment from different seats, so
           # each reads its own AGENT_MODEL_<ROLE>, falls back to the repo-wide AGENT_MODEL,
           # and finally to the literal default below — which is what the MIA app's model

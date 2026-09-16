@@ -23,6 +23,10 @@
 #   7. every workflow file still PARSES — a heredoc body at column 0 ends the enclosing `run: |`
 #      block scalar, and GitHub responds to an unparseable workflow by ignoring it in complete
 #      silence: no run, no error, every trigger dead. See scripts/tests/workflows.test.js.
+#
+# It also checks the skill layer, which fails the same quiet way: a malformed or mis-named
+# SKILL.md is skipped by skills.js without an error, and the only evidence is that one seat
+# stopped getting the procedure it was written for. See scripts/tests/skills.test.js.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -52,4 +56,4 @@ if ! node --test "${tests[@]}"; then
 fi
 
 echo "✓ Every state has an owner and an exit, no role can speak without naming the next one,"
-echo "  and every workflow file still parses."
+echo "  every workflow file still parses, and every seat has the skills it was given."

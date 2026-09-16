@@ -127,20 +127,34 @@ object NetworkModule {
         Bundled("decompose-brief.js", ".github/scripts/decompose-brief.js"),
         Bundled("qc-review.js", ".github/scripts/qc-review.js"),
         Bundled("token-usage.js", ".github/scripts/token-usage.js"),
+        Bundled("skills.js", ".github/scripts/skills.js"),
+        Bundled("glm-vision.js", ".github/scripts/glm-vision.js"),
+
+        Bundled("skill-mia-po-brief.md", ".github/skills/mia-po-brief/SKILL.md"),
+        Bundled("skill-mia-brief-decomposition.md", ".github/skills/mia-brief-decomposition/SKILL.md"),
+        Bundled("skill-mia-qc-review.md", ".github/skills/mia-qc-review/SKILL.md"),
+        Bundled("skill-mia-tec-implementation.md", ".github/skills/mia-tec-implementation/SKILL.md"),
+        Bundled("skill-mia-failure-triage.md", ".github/skills/mia-failure-triage/SKILL.md"),
+        Bundled("skill-glmv-visual-brief.md", ".github/skills/glmv-visual-brief/SKILL.md"),
+        Bundled("skill-glmocr-doc-intake.md", ".github/skills/glmocr-doc-intake/SKILL.md"),
+        Bundled("skill-glm-asset-gen.md", ".github/skills/glm-asset-gen/SKILL.md"),
 
         Bundled("agents-android.md", "AGENTS.md", ProjectType.ANDROID),
+        Bundled("skill-mia-android-compose.md", "skills/mia-android-compose/SKILL.md", ProjectType.ANDROID),
         Bundled("design-tokens.kt", "app/src/main/java/mia/design/Tokens.kt", ProjectType.ANDROID),
         Bundled("design-theme.kt", "app/src/main/java/mia/design/MiaTheme.kt", ProjectType.ANDROID),
         Bundled("design-components.kt", "app/src/main/java/mia/design/MiaComponents.kt", ProjectType.ANDROID),
         Bundled("design-example.kt", "app/src/main/java/mia/design/ExampleScreen.kt", ProjectType.ANDROID),
 
         Bundled("agents-web.md", "AGENTS.md", ProjectType.WEB),
+        Bundled("skill-mia-web-frontend.md", "skills/mia-web-frontend/SKILL.md", ProjectType.WEB),
         Bundled("web-tokens.css", "src/styles/tokens.css", ProjectType.WEB),
         Bundled("web-theme.css", "src/styles/theme.css", ProjectType.WEB),
         Bundled("web-components.css", "src/styles/components.css", ProjectType.WEB),
         Bundled("web-example.html", "src/example.html", ProjectType.WEB),
 
-        Bundled("agents-plain.md", "AGENTS.md", ProjectType.PLAIN)
+        Bundled("agents-plain.md", "AGENTS.md", ProjectType.PLAIN),
+        Bundled("skill-mia-plain-stack.md", "skills/mia-plain-stack/SKILL.md", ProjectType.PLAIN)
     )
 
     /**

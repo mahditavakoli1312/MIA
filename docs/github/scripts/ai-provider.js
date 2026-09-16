@@ -17,6 +17,7 @@
 // can be tested with a fake environment.
 
 const { charter, handoff: renderHandoff } = require("./agent-voice.js");
+const { skillsFor } = require("./skills.js");
 
 /** Everything that differs between the services an AGENT_MODEL can live on. */
 const PROVIDERS = {
@@ -104,7 +105,19 @@ async function askAI(ai, { system, user, role }) {
   // The role comes from the resolved provider, which already knows which seat it is buying
   // tokens for; passing `role: null` explicitly is the opt-out, and nothing but a test uses it.
   const seatRole = role === undefined ? ai.role : role;
-  const systemPrompt = seatRole ? `${charter(seatRole)}\n\n---\n\n${system}` : system;
+  // The skills this seat needs for THIS request, from the same single point and for the same
+  // reason. Which ones those are depends on what the request is about, so it is chosen from the
+  // user message — the issue, the comment or the diff — rather than from the role alone, and it
+  // comes after the job-specific instructions because a procedure is how to do the job, not a
+  // replacement for being told what the job is. Returns "" on a repo with no skills installed,
+  // which is every repo bootstrapped before this file existed.
+  const skills = seatRole ? skillsFor({ role: seatRole, text: user }) : "";
+  const systemPrompt = [
+    seatRole ? `${charter(seatRole)}\n\n---\n\n${system}` : system,
+    skills,
+  ]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
 
   let lastError;
   for (const key of ai.keys) {

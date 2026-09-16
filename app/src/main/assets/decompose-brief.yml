@@ -113,6 +113,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
           # The brief manager's own model, falling back to the repo-wide one and then to this
           # literal default, which the MIA app's model management screen rewrites.
           # Raw model id — NO provider prefix: this script calls the provider's API directly.
