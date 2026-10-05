@@ -1,0 +1,138 @@
+# Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/).
+#
+# The live product. When a repo's product is a web thing — a site, a landing page, a React or
+# Vite app, anything that ends up as static files — this workflow publishes it to GitHub Pages
+# on every push to the default branch, so the URL in the repo's Environments panel is always
+# the current state of the code. TEC squash-merges its own pull requests, so in practice the
+# live page updates a minute or two after the agent finishes an issue, and the issue gets a
+# comment with the link.
+#
+# On a repo whose product is NOT web (an Android app, a CLI, a library) the detect step finds
+# nothing to publish and every later step is skipped — the run passes green and costs seconds.
+#
+# One-time setup per repo: Settings → Pages → Build and deployment → Source = "GitHub Actions".
+# The configure-pages step below tries to switch it on by itself, but that call needs admin
+# rights the default GITHUB_TOKEN does not always carry, so it is allowed to fail quietly.
+name: Live Preview (Pages)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Pages deployments are a single-slot resource: only the newest one matters, so an in-flight
+# deploy for an older commit is cancelled rather than queued behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # What kind of web project is this, if any? `kind` decides whether the rest of the job
+      # runs at all, and `dir` is what eventually gets uploaded.
+      - name: Detect a web product
+        id: detect
+        run: |
+          kind=none
+          dir=.
+          if [ -f package.json ]; then
+            # A build script means the shipped files are generated, not committed.
+            if node -e 'process.exit(require("./package.json").scripts?.build ? 0 : 1)' 2>/dev/null; then
+              kind=npm
+            elif [ -f index.html ]; then
+              kind=static
+            fi
+          elif [ -f index.html ]; then
+            kind=static
+          else
+            # A site kept in a subfolder — the shape MIA's own repo uses for `web/`.
+            for d in web site public docs www; do
+              if [ -f "$d/index.html" ]; then kind=static; dir="$d"; break; fi
+            done
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          if [ "$kind" = none ]; then
+            echo "No web product in this repository — nothing to publish." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Detected a **$kind** web product in \`$dir\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Node 20
+        if: steps.detect.outputs.kind == 'npm'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install and build
+        id: build
+        if: steps.detect.outputs.kind == 'npm'
+        run: |
+          # `npm ci` needs a lockfile the agent may not have committed; fall back rather than fail.
+          npm ci || npm install
+          npm run build --if-present
+          # Whichever conventional output directory the tool actually produced. Vite writes
+          # dist/, CRA and many others build/, Next `next export` out/, Nuxt .output/public,
+          # Jekyll/Eleventy _site — checked newest-first, most specific first.
+          out=""
+          for d in dist build out .output/public _site public; do
+            if [ -d "$d" ] && [ -n "$(ls -A "$d" 2>/dev/null)" ]; then out="$d"; break; fi
+          done
+          if [ -z "$out" ]; then
+            echo "::error::The build script ran but produced none of dist/, build/, out/, .output/public/, _site/ or public/."
+            exit 1
+          fi
+          echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+      # Best-effort: flips Settings → Pages → Source to "GitHub Actions" when the token is
+      # allowed to. When it isn't, the deploy step below still works as soon as a human has
+      # set it once by hand, so this must not fail the run.
+      - name: Configure Pages
+        id: configure
+        if: steps.detect.outputs.kind != 'none'
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload the site
+        if: steps.detect.outputs.kind != 'none'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.build.outputs.dir || steps.detect.outputs.dir }}
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        if: steps.detect.outputs.kind != 'none'
+        uses: actions/deploy-pages@v4
+
+      # Put the live URL where people actually look: the run summary, the repo's About box, and
+      # the issue this deploy came from. TEC's squash commits say "Resolves #12", so the issue
+      # that asked for the change is the one told that it is now live.
+      - name: Report the live URL
+        if: steps.detect.outputs.kind != 'none' && steps.deploy.outputs.page_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGE_URL: ${{ steps.deploy.outputs.page_url }}
+        run: |
+          echo "🌍 Live at $PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
+          # Needs admin rights on the repo, which GITHUB_TOKEN may not have — best effort.
+          gh repo edit "${{ github.repository }}" --homepage "$PAGE_URL" 2>/dev/null || true
+          issue="$(git log -1 --pretty=%B | grep -oE '(Resolves|Closes|Fixes) #[0-9]+' | head -1 | grep -oE '[0-9]+' || true)"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "🌍 This is live now: ${PAGE_URL}" || true
+          fi

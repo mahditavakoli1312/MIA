@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material3.Button
@@ -55,9 +56,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import ir.mahditavakoli.mia.data.model.RepoIssue
 
 /**
- * All of one project's GitHub issues, split into open and closed tabs.
+ * All of one project's GitHub issues: open, closed, and the briefs waiting to become issues.
  *
  * @param onOpenIssue navigates to the issue's own screen (body + comments).
+ * @param onNewBrief opens the "نیت جدید" screen — a long-form intent for the PO agent, which is
+ *        a different thing from the "new issue" sheet this screen already has.
+ * @param reloadKey bump it to make this screen re-read GitHub. It is how filing a brief on the
+ *        screen above gets the new row to appear here, without that screen having to know
+ *        anything about this ViewModel.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,6 +71,8 @@ fun IssuesScreen(
     projectName: String,
     onBack: () -> Unit,
     onOpenIssue: (Int) -> Unit,
+    onNewBrief: () -> Unit = {},
+    reloadKey: Int = 0,
     // Keyed per project so switching projects gets its own state rather than the previous
     // project's issues flashing up while the new ones load.
     viewModel: IssuesViewModel = viewModel(key = "issues-$projectName")
@@ -73,6 +81,8 @@ fun IssuesScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(projectName) { viewModel.load(projectName) }
+    // 0 is the initial value, which `load` above has already covered.
+    LaunchedEffect(reloadKey) { if (reloadKey > 0) viewModel.refresh() }
     LaunchedEffect(Unit) {
         viewModel.events.collect { message -> snackbarHostState.showSnackbar(message) }
     }
@@ -102,6 +112,13 @@ fun IssuesScreen(
                         }
                     },
                     actions = {
+                        IconButton(onClick = onNewBrief) {
+                            Icon(
+                                imageVector = Icons.Filled.Lightbulb,
+                                contentDescription = "نیت جدید",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                         IconButton(onClick = viewModel::refresh, enabled = !uiState.isLoading) {
                             Icon(
                                 imageVector = Icons.Filled.Refresh,
@@ -135,7 +152,7 @@ fun IssuesScreen(
                     .padding(padding)
             ) {
                 TabRow(
-                    selectedTabIndex = if (uiState.filter == IssueFilter.OPEN) 0 else 1,
+                    selectedTabIndex = uiState.filter.ordinal,
                     containerColor = MaterialTheme.colorScheme.background
                 ) {
                     Tab(
@@ -147,6 +164,11 @@ fun IssuesScreen(
                         selected = uiState.filter == IssueFilter.CLOSED,
                         onClick = { viewModel.onFilterChange(IssueFilter.CLOSED) },
                         text = { Text("بسته (${uiState.closedCount})") }
+                    )
+                    Tab(
+                        selected = uiState.filter == IssueFilter.BRIEFS,
+                        onClick = { viewModel.onFilterChange(IssueFilter.BRIEFS) },
+                        text = { Text("نیت‌ها (${uiState.briefCount})") }
                     )
                 }
 
@@ -167,10 +189,12 @@ fun IssuesScreen(
                         )
 
                         uiState.visible.isEmpty() -> Text(
-                            text = if (uiState.filter == IssueFilter.OPEN) {
-                                "ایشوی بازی در این مخزن نیست."
-                            } else {
-                                "هنوز ایشوی بسته‌شده‌ای نیست."
+                            text = when (uiState.filter) {
+                                IssueFilter.OPEN -> "ایشوی بازی در این مخزن نیست."
+                                IssueFilter.CLOSED -> "هنوز ایشوی بسته‌شده‌ای نیست."
+                                IssueFilter.BRIEFS ->
+                                    "هنوز نیتی ثبت نشده. با دکمهٔ 💡 در نوار بالا یک خواستهٔ بزرگ " +
+                                        "بنویسید و PO آن را به ایشوهای کوچک می‌شکند."
                             },
                             modifier = Modifier
                                 .align(Alignment.Center)
@@ -302,6 +326,27 @@ private fun IssueRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+        // The two states where a row is waiting on something the label chips below don't make
+        // obvious: QC has sent the work back, or it has given up and nobody is coming.
+        val attention = when {
+            issue.needsHuman -> "🙋 QC دو بار برگرداند — تا کسی دست به کار نشود، ایجنت سراغش نمی‌رود"
+            issue.needsRework -> "🛑 QC اصلاح خواسته — دوباره در صف ایجنت است"
+            else -> null
+        }
+        if (attention != null) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = attention,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (issue.needsHuman) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.secondary
+                },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
         if (issue.labels.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))

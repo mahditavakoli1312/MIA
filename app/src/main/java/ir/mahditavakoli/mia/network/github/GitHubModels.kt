@@ -99,6 +99,24 @@ data class PutSecretBody(
 )
 
 /**
+ * GET/PUT /repos/{owner}/{repo}/actions/permissions/workflow — the "Workflow permissions"
+ * block of a repo's Actions settings.
+ *
+ * MIA only cares about [canApprovePullRequestReviews], the "Allow GitHub Actions to create and
+ * approve pull requests" switch: with it off, `gh pr create` under `GITHUB_TOKEN` is refused
+ * outright, so TEC commits a branch and then cannot open the pull request it just prepared.
+ * [defaultWorkflowPermissions] is read only so it can be written back untouched — see
+ * [ir.mahditavakoli.mia.data.repository.RepoBootstrapper.allowActionsToOpenPullRequests].
+ */
+@Serializable
+data class WorkflowPermissions(
+    /** "read" or "write" — the token scope a workflow gets when it declares none itself. */
+    @SerialName("default_workflow_permissions") val defaultWorkflowPermissions: String? = null,
+    @SerialName("can_approve_pull_request_reviews")
+    val canApprovePullRequestReviews: Boolean = false
+)
+
+/**
  * One issue as the list/detail endpoints return it.
  *
  * The list endpoint (`GET /repos/{owner}/{repo}/issues`) also returns pull requests — GitHub
@@ -136,6 +154,15 @@ data class GitHubLabel(
     val color: String = ""
 )
 
+/**
+ * PATCH /repos/{owner}/{repo}/issues/{number} — only the fields being changed are sent.
+ *
+ * [state] is "open" or "closed". GitHub also accepts a `state_reason`, but leaving it off lets
+ * GitHub pick its own default ("completed" when closing), which is what a task MIA closes means.
+ */
+@Serializable
+data class UpdateIssueBody(val state: String)
+
 /** GET/POST /repos/{owner}/{repo}/issues/{number}/comments */
 @Serializable
 data class GitHubIssueComment(
@@ -143,7 +170,39 @@ data class GitHubIssueComment(
     val body: String = "",
     val user: GitHubUser? = null,
     @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("html_url") val htmlUrl: String = "",
+    /**
+     * ".../issues/12" — present on the repo-wide comments endpoint, which is how a comment read
+     * without asking for a specific issue still knows which issue it belongs to. The per-issue
+     * endpoint returns it too; the caller there already knows the number and ignores it.
+     */
+    @SerialName("issue_url") val issueUrl: String? = null
+)
+
+/**
+ * One commit, as the spend screen reads them: GET /repos/{owner}/{repo}/commits.
+ *
+ * Only three things are needed — the message (which carries the `Token-Spend:` trailer the TEC
+ * workflow writes), when it landed, and a link — so the rest of GitHub's very large commit object
+ * is deliberately not modelled.
+ */
+@Serializable
+data class GitHubCommit(
+    val sha: String = "",
+    val commit: GitHubCommitDetail = GitHubCommitDetail(),
     @SerialName("html_url") val htmlUrl: String = ""
+)
+
+@Serializable
+data class GitHubCommitDetail(
+    val message: String = "",
+    val author: GitHubCommitAuthor? = null
+)
+
+@Serializable
+data class GitHubCommitAuthor(
+    /** ISO-8601, e.g. "2026-09-01T10:22:03Z". */
+    val date: String? = null
 )
 
 /** POST /repos/{owner}/{repo}/issues/{number}/comments */

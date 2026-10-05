@@ -17,6 +17,7 @@ okhttp = "4.12.0"
 materialIconsExtended = "1.7.8"
 chucker = "4.1.0"
 securityCrypto = "1.1.0-alpha06"
+work = "2.9.1"
 lazysodium = "5.1.0"
 jna = "5.14.0"
 
@@ -45,6 +46,7 @@ okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-i
 chucker = { group = "com.github.chuckerteam.chucker", name = "library", version.ref = "chucker" }
 chucker-no-op = { group = "com.github.chuckerteam.chucker", name = "library-no-op", version.ref = "chucker" }
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
+androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 # lazysodium-android (native libsodium) + its jna runtime are added directly in
 # app/build.gradle.kts with the @aar classifier, which a catalog alias can't express.
 # Versions above (lazysodium / jna) are the single source of truth.

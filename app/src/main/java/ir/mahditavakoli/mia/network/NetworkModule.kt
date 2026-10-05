@@ -4,9 +4,12 @@ import android.content.Context
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.data.repository.AgentModelMigrator
+import ir.mahditavakoli.mia.data.repository.AgentTeamFiles
 import ir.mahditavakoli.mia.data.repository.BootstrapFile
 import ir.mahditavakoli.mia.data.repository.GitHubRepository
 import ir.mahditavakoli.mia.data.repository.RepoBootstrapper
+import ir.mahditavakoli.mia.data.model.ProjectType
+import ir.mahditavakoli.mia.data.repository.TeamFilesUpdater
 import ir.mahditavakoli.mia.data.session.SessionManager
 import ir.mahditavakoli.mia.network.gemini.GeminiApi
 import ir.mahditavakoli.mia.network.github.GitHubApi
@@ -52,24 +55,143 @@ object NetworkModule {
     }
 
     /**
-     * The bundled files uploaded to every new repo, mapping each asset to its repo-relative
-     * path: the TEC coding agent, the PO/QC advisor workflow + its script, the token-spend
-     * reporter, and the add-to-project and CI workflows. Together they stand up the whole
-     * free-model AI team.
+     * One bundled asset: the file in `assets/`, where it lands in a new repo, and which kinds of
+     * project get it.
+     *
+     * [type] is what makes the bootstrap type-aware. `null` means "every project" — that is every
+     * file under `.github/`, and it is null rather than "all three types" on purpose: those
+     * workflows already detect what they are looking at (`ci.yml` checks for `gradlew` before it
+     * builds, `preview-web.yml` for a web entry point before it publishes), so they are not three
+     * variants that happen to be identical, they are one file that does not care.
+     *
+     * A non-null [type] means the file is only correct for that kind of project. Two things fall
+     * in there, and both used to be committed into every repo regardless:
+     *
+     * - `AGENTS.md`, injected into every PO/QC/TEC prompt. All three variants land at the same
+     *   repo path, which is exactly why the type has to be recorded here — the path alone can no
+     *   longer say which file belongs where.
+     * - the design system: four Compose files for Android, four CSS/HTML files for the web, and
+     *   deliberately none for [ProjectType.PLAIN].
+     *
+     * The readable twin of each file under `docs/github/` follows from these three fields, and
+     * `scripts/check-assets-sync.sh` derives it by parsing this list: a shared file mirrors the
+     * repo layout minus the `.github/` prefix, a typed one sits under its type's directory. That
+     * second half is what keeps the three `AGENTS.md` variants — identical repo paths, different
+     * contents — from overwriting each other in one folder. Registering an asset here is all it
+     * takes for the sync check to cover it, so the rule lives in the checker rather than being
+     * restated in Kotlin where nothing would read it.
      */
-    private val BOOTSTRAP_ASSETS = listOf(
-        "agent-issue-worker.yml" to ".github/workflows/agent-issue-worker.yml",
-        "ai-role-review.yml" to ".github/workflows/ai-role-review.yml",
-        "add-to-project.yml" to ".github/workflows/add-to-project.yml",
-        "ci.yml" to ".github/workflows/ci.yml",
-        "ai-role-review.js" to ".github/scripts/ai-role-review.js",
-        "token-usage.js" to ".github/scripts/token-usage.js"
+    private data class Bundled(
+        val asset: String,
+        val repoPath: String,
+        val type: ProjectType? = null
     )
 
-    /** Reads each bundled asset and pairs it with the path it should live at in a new repo. */
-    fun readBootstrapFiles(): List<BootstrapFile> = BOOTSTRAP_ASSETS.map { (asset, path) ->
-        val content = appContext.assets.open(asset).bufferedReader().use { it.readText() }
-        BootstrapFile(repoPath = path, content = content)
+    /**
+     * Everything MIA can commit into a repo it creates, and who gets it.
+     *
+     * The team files — the TEC coding agent, the PO/QC advisor workflow + its script, the PO brief
+     * decomposer, the PO re-scoper, the QC pull-request gate, the shared provider/key module every
+     * role script calls, the token-spend reporter, the add-to-project and CI workflows, and the
+     * Pages publisher that puts a web product's live URL on the repo — stand up the whole
+     * free-model AI team and are identical on every kind of project.
+     *
+     * After them come the typed files. `AGENTS.md` is the one that matters most: it is short and it
+     * is injected into every agent prompt, so the Android copy telling an agent to run `./gradlew`
+     * is not a harmless extra file on a website — it is the first instruction the agent reads. The
+     * design systems follow the same logic; the Android one lands in a fixed `mia.design` package
+     * because MIA cannot know what package a repo it just created will end up using, and the web
+     * one lands in `src/styles/` as plain CSS custom properties so it is still correct after TEC
+     * scaffolds Vite, React, or nothing at all.
+     */
+    private val BOOTSTRAP_ASSETS = listOf(
+        Bundled("agent-issue-worker.yml", ".github/workflows/agent-issue-worker.yml"),
+        Bundled("ai-role-review.yml", ".github/workflows/ai-role-review.yml"),
+        Bundled("decompose-brief.yml", ".github/workflows/decompose-brief.yml"),
+        Bundled("qc-review.yml", ".github/workflows/qc-review.yml"),
+        Bundled("add-to-project.yml", ".github/workflows/add-to-project.yml"),
+        Bundled("unblock-dependents.yml", ".github/workflows/unblock-dependents.yml"),
+        Bundled("shepherd.yml", ".github/workflows/shepherd.yml"),
+        Bundled("ci.yml", ".github/workflows/ci.yml"),
+        Bundled("preview-web.yml", ".github/workflows/preview-web.yml"),
+        Bundled("agent-voice.js", ".github/scripts/agent-voice.js"),
+        Bundled("ai-provider.js", ".github/scripts/ai-provider.js"),
+        Bundled("ledger.js", ".github/scripts/ledger.js"),
+        Bundled("say.js", ".github/scripts/say.js"),
+        Bundled("unblock.js", ".github/scripts/unblock.js"),
+        Bundled("triage-failure.js", ".github/scripts/triage-failure.js"),
+        Bundled("shepherd.js", ".github/scripts/shepherd.js"),
+        Bundled("brief-close.js", ".github/scripts/brief-close.js"),
+        Bundled("ai-role-review.js", ".github/scripts/ai-role-review.js"),
+        Bundled("po-rebrief.js", ".github/scripts/po-rebrief.js"),
+        Bundled("decompose-brief.js", ".github/scripts/decompose-brief.js"),
+        Bundled("qc-review.js", ".github/scripts/qc-review.js"),
+        Bundled("token-usage.js", ".github/scripts/token-usage.js"),
+        Bundled("skills.js", ".github/scripts/skills.js"),
+        Bundled("glm-vision.js", ".github/scripts/glm-vision.js"),
+
+        Bundled("skill-mia-po-brief.md", ".github/skills/mia-po-brief/SKILL.md"),
+        Bundled("skill-mia-brief-decomposition.md", ".github/skills/mia-brief-decomposition/SKILL.md"),
+        Bundled("skill-mia-qc-review.md", ".github/skills/mia-qc-review/SKILL.md"),
+        Bundled("skill-mia-tec-implementation.md", ".github/skills/mia-tec-implementation/SKILL.md"),
+        Bundled("skill-mia-failure-triage.md", ".github/skills/mia-failure-triage/SKILL.md"),
+        Bundled("skill-glmv-visual-brief.md", ".github/skills/glmv-visual-brief/SKILL.md"),
+        Bundled("skill-glmocr-doc-intake.md", ".github/skills/glmocr-doc-intake/SKILL.md"),
+        Bundled("skill-glm-asset-gen.md", ".github/skills/glm-asset-gen/SKILL.md"),
+
+        Bundled("agents-android.md", "AGENTS.md", ProjectType.ANDROID),
+        Bundled("skill-mia-android-compose.md", "skills/mia-android-compose/SKILL.md", ProjectType.ANDROID),
+        Bundled("design-tokens.kt", "app/src/main/java/mia/design/Tokens.kt", ProjectType.ANDROID),
+        Bundled("design-theme.kt", "app/src/main/java/mia/design/MiaTheme.kt", ProjectType.ANDROID),
+        Bundled("design-components.kt", "app/src/main/java/mia/design/MiaComponents.kt", ProjectType.ANDROID),
+        Bundled("design-example.kt", "app/src/main/java/mia/design/ExampleScreen.kt", ProjectType.ANDROID),
+
+        Bundled("agents-web.md", "AGENTS.md", ProjectType.WEB),
+        Bundled("skill-mia-web-frontend.md", "skills/mia-web-frontend/SKILL.md", ProjectType.WEB),
+        Bundled("web-tokens.css", "src/styles/tokens.css", ProjectType.WEB),
+        Bundled("web-theme.css", "src/styles/theme.css", ProjectType.WEB),
+        Bundled("web-components.css", "src/styles/components.css", ProjectType.WEB),
+        Bundled("web-example.html", "src/example.html", ProjectType.WEB),
+
+        Bundled("agents-plain.md", "AGENTS.md", ProjectType.PLAIN),
+        Bundled("skill-mia-plain-stack.md", "skills/mia-plain-stack/SKILL.md", ProjectType.PLAIN)
+    )
+
+    /**
+     * The `.github/` machinery, which is the same on every kind of project.
+     *
+     * Split out from [readBootstrapFiles] for [teamFilesUpdater]: it refreshes the team files in a
+     * repo that already exists, and the type of that repo is not something MIA recorded when it
+     * was created. Asking the registry for the untyped files answers the question without having
+     * to guess, and means the updater can no longer reach a typed file even by accident.
+     */
+    fun readTeamFiles(): List<BootstrapFile> = read(BOOTSTRAP_ASSETS.filter { it.type == null })
+
+    /**
+     * Everything a new [type] repo gets: the shared team files plus that type's own conventions
+     * and design system.
+     *
+     * The per-role model rewrite happens here rather than after the repo exists because the
+     * alternative is a repo that is briefly wrong: bootstrap, then a second pass of commits to
+     * move four roles onto the models the user already asked for — visible in the history, and a
+     * window in which a `@tec` typed straight after creation runs on the wrong model. The assets
+     * on disk are never touched; only the copy being uploaded.
+     */
+    fun readBootstrapFiles(type: ProjectType): List<BootstrapFile> =
+        read(BOOTSTRAP_ASSETS.filter { it.type == null || it.type == type })
+
+    private fun read(bundled: List<Bundled>): List<BootstrapFile> {
+        val models = secretStore.defaultModels().filterKeys { it.envSuffix != null }
+        return bundled.map { file ->
+            val content = appContext.assets.open(file.asset).bufferedReader().use { it.readText() }
+            val role = AgentTeamFiles.MODEL_BEARING_PATHS[file.repoPath]
+            val withModels = if (role == null) {
+                content
+            } else {
+                AgentTeamFiles.applyRoleModels(content, models, role).text
+            }
+            BootstrapFile(repoPath = file.repoPath, content = withModels)
+        }
     }
 
     /**
@@ -84,13 +206,27 @@ object NetworkModule {
         )
     }
 
+    /**
+     * Brings an existing repo's `.github` files up to this build's — the counterpart to
+     * [repoBootstrapper], which can only ever install them into a repo it is creating.
+     */
+    val teamFilesUpdater: TeamFilesUpdater by lazy {
+        TeamFilesUpdater(
+            api = gitHubApi,
+            base64 = AndroidBase64Encoder,
+            base64Decoder = AndroidBase64Decoder,
+            currentFiles = ::readTeamFiles,
+            migrator = agentModelMigrator
+        )
+    }
+
     /** Wires new repos up to the AI team (workflows + script, labels, secret). */
     val repoBootstrapper: RepoBootstrapper by lazy {
         RepoBootstrapper(
             api = gitHubApi,
             base64 = AndroidBase64Encoder,
             encryptor = LibsodiumSecretEncryptor,
-            files = readBootstrapFiles()
+            files = ::readBootstrapFiles
         )
     }
 
@@ -108,6 +244,7 @@ object NetworkModule {
             isConfigured = isGitHubConfigured,
             bootstrapper = repoBootstrapper,
             agentModelMigrator = agentModelMigrator,
+            teamFilesUpdater = teamFilesUpdater,
             agentApiKeyProvider = { secretStore.agentApiKey },
             agentFallbackApiKeyProvider = { secretStore.agentFallbackApiKey },
             miniMaxApiKeyProvider = { secretStore.miniMaxApiKey }

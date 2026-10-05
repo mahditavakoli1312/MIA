@@ -8,7 +8,10 @@ enum class ActionType {
     @SerialName("create_project") CREATE_PROJECT,
     @SerialName("delete_project") DELETE_PROJECT,
     @SerialName("add_task") ADD_TASK,
-    @SerialName("remove_task") REMOVE_TASK
+    @SerialName("remove_task") REMOVE_TASK,
+    @SerialName("complete_task") COMPLETE_TASK,
+    @SerialName("reopen_task") REOPEN_TASK,
+    @SerialName("set_due_date") SET_DUE_DATE
 }
 
 /**
@@ -24,5 +27,16 @@ data class VoiceCommandIntent(
     // specifications + UI/UX guidelines), used as the GitHub issue body so the Gemini coding
     // agent can implement without follow-up. Null for non-task actions. See GeminiIntentPrompt.
     @SerialName("task_description") val taskDescription: String? = null,
-    @SerialName("due_date") val dueDate: String? = null
+    @SerialName("due_date") val dueDate: String? = null,
+    /**
+     * What kind of product a `create_project` is asking for, which decides the conventions file
+     * and the design system MIA commits into the new repo (see [ProjectType]).
+     *
+     * Null for every other action — they act on a repo that already exists and already made this
+     * choice — and null too when the command simply did not say, which is why the confirmation
+     * sheet shows a picker on a create_project row rather than assuming.
+     */
+    @SerialName("project_type")
+    @Serializable(with = LenientProjectTypeSerializer::class)
+    val projectType: ProjectType? = null
 )

@@ -32,13 +32,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ir.mahditavakoli.mia.data.model.BriefCounts
 import ir.mahditavakoli.mia.data.model.Project
 import ir.mahditavakoli.mia.data.model.Task
 
 /**
  * @param canChangeAgentModel false without a GitHub token — there is no repo to repoint, so the
  *        button is hidden rather than shown and then failing on tap.
- * @param onChangeAgentModel opens the picker that repoints this project's repo (@tec/@po/@qc).
+ * @param onChangeAgentModel opens this project's model screen — a model per seat of its AI team
+ *        (@tec / @po / @qc / the brief manager), each repointed in that repo's own workflows.
  * @param issueSummary this project's open/closed issue counts, or null when GitHub isn't
  *        configured at all — the whole issues strip is then left off the card.
  * @param onOpenIssues opens the full issues list for this project.
@@ -71,7 +73,7 @@ fun ProjectCard(
                     IconButton(onClick = onChangeAgentModel) {
                         Icon(
                             imageVector = Icons.Filled.SmartToy,
-                            contentDescription = "تغییر مدل ایجنت این پروژه",
+                            contentDescription = "مدل‌های تیم AI این پروژه",
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -137,6 +139,14 @@ private fun IssueStrip(
                 container = MaterialTheme.colorScheme.surfaceVariant,
                 content = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // Briefs get their own chip, and only when there are any. They are counted apart
+            // from the two above (see IssueList.counts) because a brief is one intent that
+            // becomes several issues — adding it to "open" would overstate the queue and hide
+            // the number that actually needs someone's attention.
+            if (!counts.briefs.isEmpty) {
+                Spacer(Modifier.width(8.dp))
+                BriefChip(counts.briefs)
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 text = "ایشوها",
@@ -191,6 +201,37 @@ private fun IssueStrip(
             TextButton(onClick = onRetry) { Text("تلاش دوباره") }
         }
     }
+}
+
+/**
+ * The card's brief chip: how many intents are open, and where they stand.
+ *
+ * The decomposition status is in the chip's colour and text rather than a separate row, because
+ * there are only three states worth a glance: waiting for the PO, planned, or the PO could not do
+ * it. The last one is the only one that needs a human, so it is the one shown in the error colour.
+ */
+@Composable
+private fun BriefChip(briefs: BriefCounts) {
+    val (text, container, content) = when {
+        briefs.failed > 0 -> Triple(
+            "${briefs.failed} نیتِ تجزیه‌نشده",
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer
+        )
+
+        briefs.pending > 0 -> Triple(
+            "${briefs.pending} نیت در انتظار تجزیه",
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer
+        )
+
+        else -> Triple(
+            "${briefs.total} نیتِ تجزیه‌شده",
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    }
+    CountChip(text = text, container = container, content = content)
 }
 
 @Composable

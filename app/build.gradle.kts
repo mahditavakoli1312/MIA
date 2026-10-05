@@ -92,6 +92,7 @@ dependencies {
     implementation(libs.retrofit.kotlinx.serialization.converter)
     implementation(libs.okhttp.logging.interceptor)
     implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.work.runtime)
     // @aar: pull the Android-native artifacts (bundled libsodium + JNA dispatch libs).
     // Versions come from the catalog; the @aar classifier can't be expressed as an alias.
     implementation("com.goterl:lazysodium-android:${libs.versions.lazysodium.get()}@aar")

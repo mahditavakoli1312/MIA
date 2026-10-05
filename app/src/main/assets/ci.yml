@@ -25,12 +25,142 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The agent team's own health check, run against the copy this repo actually has.
+      #
+      # A generated repo's `.github/scripts/` can be edited by hand — and the one thing that must
+      # survive any edit is that every state an issue can be in has an owner and a way out. A
+      # broken table here produces no failure at runtime: issues simply stop moving, which looks
+      # exactly like nobody having filed any.
+      - name: Check the agent state table
+        if: ${{ hashFiles('.github/scripts/agent-voice.js') != '' }}
+        run: |
+          node -e '
+            const { STATES, STATE_PRIORITY } = require("./.github/scripts/agent-voice.js");
+            let bad = 0;
+            for (const [name, spec] of Object.entries(STATES)) {
+              if (!spec.owner) { console.error(`✗ state "${name}" has no owner`); bad++; }
+              if (!spec.terminal && !(spec.exits || []).length) {
+                console.error(`✗ state "${name}" has no exit — a task in it would never move again`);
+                bad++;
+              }
+              if (!STATE_PRIORITY.includes(name)) {
+                console.error(`✗ state "${name}" is missing from STATE_PRIORITY`);
+                bad++;
+              }
+            }
+            if (bad) process.exit(1);
+            console.log(`✓ ${Object.keys(STATES).length} states, each with an owner and a way out.`);
+          '
+
       - name: Set up JDK 17
         if: ${{ hashFiles('gradlew') != '' }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      # The design-system rule, enforced rather than documented. A screen that writes its own
+      # colours and spacing is how a generated product ends up looking like four people built it,
+      # and it is the single most common thing a small model does when nobody checks.
+      #
+      # Both design systems are checked by the same step, because a repo has whichever one it has
+      # and neither check costs anything when its files are absent. The Android half looks at
+      # *Screen.kt, the web half at page and component styles; each design module is exempt from
+      # its own check, since raw values are exactly what a token file is for.
+      - name: Lint for raw colours and sizes
+        run: |
+          colors=""
+          sizes=""
+          guidance=""
+
+          # --- Android: Compose screens ------------------------------------------------------
+          screens="$(git ls-files '*Screen.kt' | grep -v '/mia/design/' || true)"
+          if [ -n "$screens" ]; then
+            # `[^A-Za-z0-9_.]` before the digits so `Spacing.md` and `Sizes.iconSm` don't match,
+            # and a bare `16.dp` does.
+            colors="$colors$(grep -nE 'Color\(0x|Color\.(Red|Green|Blue|Yellow|Cyan|Magenta|White|Black|Gray|LightGray|DarkGray)' $screens || true)"
+            sizes="$sizes$(grep -nE '(^|[^A-Za-z0-9_.])[0-9]+(\.[0-9]+)?\.(dp|sp)' $screens || true)"
+            guidance="${guidance}Kotlin: use MaterialTheme.colorScheme.* for colour and the tokens in app/src/main/java/mia/design/Tokens.kt (Spacing, Radius, Sizes, Elevation, Motion) for every number. Build screens from the components in MiaComponents.kt."$'\n'
+          fi
+
+          # --- Web: page and component styles ------------------------------------------------
+          # src/styles/ is the design system itself and is exempt. So is anything generated or
+          # vendored — a bundled stylesheet is not something an agent wrote.
+          styles="$(git ls-files '*.css' '*.scss' | grep -v '^src/styles/' | grep -vE '(^|/)(dist|build|node_modules|vendor)/' || true)"
+          if [ -n "$styles" ]; then
+            # A raw hex or rgb()/hsl() literal anywhere in a page stylesheet. The tokens file is
+            # the only place those belong.
+            colors="$colors$(grep -nE '#[0-9a-fA-F]{3,8}\b|\b(rgba?|hsla?)\(' $styles || true)"
+            # A bare length: `16px`, `1.5rem`. `var(--space-lg)` has no digits to match, and a
+            # 0 with no unit is not a magic number.
+            sizes="$sizes$(grep -nE '(^|[^A-Za-z0-9_.#-])[0-9]+(\.[0-9]+)?(px|rem|em)\b' $styles || true)"
+            guidance="${guidance}CSS: use the custom properties in src/styles/tokens.css for every colour and every number (--color-*, --space-*, --radius-*, --text-*, --motion-*). Build pages from the classes in src/styles/components.css. See src/example.html."$'\n'
+          fi
+
+          if [ -z "$screens" ] && [ -z "$styles" ]; then
+            echo "No screens or page styles yet — nothing to check."
+            exit 0
+          fi
+          if [ -z "$colors" ] && [ -z "$sizes" ]; then
+            echo "Everything uses the design system."
+            exit 0
+          fi
+          {
+            echo "::error::A screen or page style is writing raw colours or sizes instead of using the design system."
+            printf '%s\n' "$guidance"
+            echo
+            echo "If a token you need is missing, add it to the token file — never inline the value."
+            echo
+            if [ -n "$colors" ]; then
+              echo "Raw colours:"
+              printf '%s\n' "$colors"
+              echo
+            fi
+            if [ -n "$sizes" ]; then
+              echo "Raw sizes:"
+              printf '%s\n' "$sizes"
+            fi
+          } >&2
+          exit 1
+
+      # The README's "how to run" section, checked rather than hoped for.
+      #
+      # It is the first thing anyone needs from a repository and the first thing to go stale, and
+      # a wrong run command does not read as out-of-date documentation — it reads as a broken
+      # project. TEC is told to keep this section true in the same pull request as any change that
+      # alters how the project runs (see AGENTS.md), so this step is the visible reminder that
+      # nobody has done it yet.
+      #
+      # A WARNING, not an error, and deliberately so. A freshly created MIA repo is a bare
+      # auto-generated README with no project in it yet — failing that would mean every new repo
+      # starts red, before there is anything to run or anyone to blame. The real gates are TEC's
+      # own definition of done and QC, which can see the diff and tell whether the run method
+      # actually changed. This one only has to be impossible to miss.
+      - name: Check the README says how to run this
+        run: |
+          if [ ! -f README.md ]; then
+            echo "::warning::This repo has no README.md, so there is nowhere that says how to run it."
+            exit 0
+          fi
+
+          # Any heading a person would plausibly put the run instructions under, in either
+          # language. Being generous here is the point: the check exists to catch "nobody wrote
+          # it", not to make projects rename a section that already does the job.
+          heading='^#{1,6}[[:space:]]*.*(اجرا|راه.?اندازی|نصب|شروع|how to run|running|run locally|getting started|quick ?start|usage|installation|setup|development)'
+          if ! grep -qiE "$heading" README.md; then
+            echo "::warning file=README.md::README.md has no section saying how to run this project. Add an \"## اجرا\" section with the exact commands that take someone from a fresh clone to the thing running."
+            exit 0
+          fi
+
+          # A heading with nothing runnable under it is the same problem wearing a title. Every
+          # real answer to "how do I run this" contains a command, and in a README a command is
+          # in a code fence.
+          if ! grep -q '```' README.md; then
+            echo "::warning file=README.md::README.md has a run section but no commands in it. Put the actual commands in a code fence, so they can be copied and pasted."
+            exit 0
+          fi
+
+          echo "✓ README.md says how to run this project."
 
       - name: Assemble (debug)
         run: |

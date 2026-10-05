@@ -47,23 +47,25 @@ ${projectContext(projects)}
 $groundingNote
 
 Output: a JSON ARRAY of one or more intent objects. Even for a single simple command, return an array holding
-exactly one object. Each object has exactly these five keys, no extra keys, no nesting:
+exactly one object. Each object has exactly these six keys, no extra keys, no nesting:
 [
   {
-    "action_type": "create_project" | "delete_project" | "add_task" | "remove_task",
+    "action_type": "create_project" | "delete_project" | "add_task" | "remove_task"
+                 | "complete_task" | "reopen_task" | "set_due_date",
     "project_name": string,
     "task_title": string or null,
     "task_description": string or null,
-    "due_date": string or null
+    "due_date": string or null,
+    "project_type": "android" | "web" | "plain" or null
   }
 ]
 
 Rules:
-1. action_type must be exactly one of the four allowed values above — never any other word.
+1. action_type must be exactly one of the seven allowed values above — never any other word.
 2. project_name is required for every object and must never be null. If the user does not name a project
    explicitly but clearly means a general/default list, use "عمومی".
-3. task_title must be a non-null, short string (a few words) for add_task and remove_task, and must be null
-   for create_project and delete_project.
+3. task_title must be a non-null, short string (a few words) for add_task, remove_task, complete_task,
+   reopen_task and set_due_date, and must be null for create_project and delete_project.
 4. task_description must be null for every action EXCEPT add_task. For add_task it must be a comprehensive,
    self-contained brief in Persian, formatted as Markdown, that an autonomous coding agent can implement from
    without further questions. Include ONLY the sections that genuinely apply to the task, keeping these exact
@@ -78,13 +80,15 @@ Rules:
      and interaction/accessibility notes. Omit this whole section for tasks with no user-facing surface.
    Expand the request into real detail, but never invent scope or hard requirements the user did not imply.
 5. due_date must be null unless the user stated or implied a deadline; when present, normalize it to
-   "YYYY-MM-DD" using today's date above. Never return a relative string like "فردا" in due_date.
+   "YYYY-MM-DD" using today's date above. Never return a relative string like "فردا" in due_date. For
+   set_due_date the deadline IS the point of the command, so due_date must never be null there — if the user
+   asks to clear a deadline rather than move it, that is not set_due_date and must not be emitted at all.
 6. Keep project_name, task_title, and all task_description prose in Persian, trimmed of filler words
    ("لطفاً", "میشه", "یه"), without surrounding quotes.
-7. For delete_project, add_task, and remove_task the user refers to something that already exists: match the
-   named project (and task) to the closest existing one from the list above and return its EXACT stored
-   spelling, even if the input differs (different letters, spacing, or نیم‌فاصله). Do not invent a new project
-   name for these actions when a clearly-corresponding existing one is present.
+7. For every action except create_project the user refers to something that already exists: match the named
+   project (and task) to the closest existing one from the list above and return its EXACT stored spelling,
+   even if the input differs (different letters, spacing, or نیم‌فاصله). Do not invent a new project name for
+   these actions when a clearly-corresponding existing one is present.
 8. Use create_project only when the user intends to create a new project. If a project with essentially the same
    name already exists, prefer interpreting the command as an action on that existing project.
 9. Break complex requests down. If the command describes several distinct pieces of work (multiple features,
@@ -94,23 +98,55 @@ Rules:
    emit the create_project object FIRST, then the add_task objects, all referencing the same project_name.
 10. Always return a JSON array (never a bare object, never fences), ordered so that any prerequisite
     (e.g. create_project) comes before objects that depend on it.
+11. project_type must be null for every action EXCEPT create_project, and describes what kind of product the
+    new repository will hold — it decides which conventions file and which design system are committed into it:
+      "android" — an Android/Kotlin/Jetpack Compose app. Words like "اپ", "اپلیکیشن", "برنامه اندروید", "موبایل".
+      "web"     — anything that runs in a browser: a site, a landing page, a dashboard, a React/Vue/Vite app.
+                  Words like "سایت", "وب‌سایت", "وب", "صفحه فرود", "پنل تحت وب".
+      "plain"   — something with no user interface to theme: a CLI, a library, a package, a bot, a set of
+                  scripts, an API-only backend. Words like "کتابخانه", "ابزار خط فرمان", "اسکریپت", "بات", "API".
+    Return null when the command genuinely does not say and the name does not imply one — do NOT guess "android"
+    just to fill the field. A null means the user will be asked, which is the right outcome for an unclear
+    command; a wrong guess silently gives the repository the wrong conventions.
+12. Distinguish finishing a task from deleting one. "تمام شد", "انجام شد", "ببند", "تیک بزن" mean complete_task
+    (the task stays, it is just marked done); only "حذف کن" / "پاک کن" mean remove_task. "باز کن دوباره",
+    "هنوز تموم نشده", "برگردون" mean reopen_task. Moving or setting a deadline on a task that already exists is
+    set_due_date, never a second add_task.
 
 Examples (assuming today is $todayIso):
 
 $exampleLabel: "یک پروژه جدید به اسم وبسایت بساز"
-[{"action_type":"create_project","project_name":"وبسایت","task_title":null,"task_description":null,"due_date":null}]
+[{"action_type":"create_project","project_name":"وبسایت","task_title":null,"task_description":null,"due_date":null,"project_type":"web"}]
+
+$exampleLabel: "یه اپ اندروید برای یادداشت‌برداری بساز به اسم نوت‌بوک"
+[{"action_type":"create_project","project_name":"نوت‌بوک","task_title":null,"task_description":null,"due_date":null,"project_type":"android"}]
+
+$exampleLabel: "یک کتابخانه پایتون به اسم دیت‌پارس بساز"
+[{"action_type":"create_project","project_name":"دیت‌پارس","task_title":null,"task_description":null,"due_date":null,"project_type":"plain"}]
+
+$exampleLabel: "پروژه جدید به اسم آلفا بساز"
+[{"action_type":"create_project","project_name":"آلفا","task_title":null,"task_description":null,"due_date":null,"project_type":null}]
 
 $exampleLabel: "پروژه بازاریابی رو حذف کن"
-[{"action_type":"delete_project","project_name":"بازاریابی","task_title":null,"task_description":null,"due_date":null}]
+[{"action_type":"delete_project","project_name":"بازاریابی","task_title":null,"task_description":null,"due_date":null,"project_type":null}]
 
 $exampleLabel: "به پروژه وبسایت یه تسک اضافه کن: طراحی صفحه تماس با ما با فرم و نقشه تا جمعه"
-[{"action_type":"add_task","project_name":"وبسایت","task_title":"صفحه تماس با ما","task_description":"## شرح\nطراحی و پیاده‌سازی صفحه «تماس با ما» شامل یک فرم تماس و نمایش موقعیت روی نقشه.\n\n## مشخصات فنی\n- فیلدهای فرم: نام، ایمیل، پیام؛ همه الزامی با اعتبارسنجی سمت کلاینت.\n- اعتبارسنجی فرمت ایمیل و نمایش خطای درون‌خطی برای هر فیلد.\n- ارسال فرم به‌صورت غیرهمزمان با نمایش وضعیت در حال ارسال و پیام موفقیت/خطا.\n- نمایش نقشه با نشانگر روی موقعیت دفتر.\n- ریسپانسیو برای موبایل و دسکتاپ.\n\n## راهنمای طراحی (UI/UX)\n- چیدمان دوبخشی: فرم در یک سمت و نقشه در سمت دیگر (در موبایل زیر هم).\n- دکمه ارسال با وضعیت‌های عادی، غیرفعال، و در حال بارگذاری.\n- پیام‌های موفقیت و خطا به‌صورت واضح و قابل‌دسترس (aria-live).","due_date":"$nextFridayIso"}]
+[{"action_type":"add_task","project_name":"وبسایت","task_title":"صفحه تماس با ما","task_description":"## شرح\nطراحی و پیاده‌سازی صفحه «تماس با ما» شامل یک فرم تماس و نمایش موقعیت روی نقشه.\n\n## مشخصات فنی\n- فیلدهای فرم: نام، ایمیل، پیام؛ همه الزامی با اعتبارسنجی سمت کلاینت.\n- اعتبارسنجی فرمت ایمیل و نمایش خطای درون‌خطی برای هر فیلد.\n- ارسال فرم به‌صورت غیرهمزمان با نمایش وضعیت در حال ارسال و پیام موفقیت/خطا.\n- نمایش نقشه با نشانگر روی موقعیت دفتر.\n- ریسپانسیو برای موبایل و دسکتاپ.\n\n## راهنمای طراحی (UI/UX)\n- چیدمان دوبخشی: فرم در یک سمت و نقشه در سمت دیگر (در موبایل زیر هم).\n- دکمه ارسال با وضعیت‌های عادی، غیرفعال، و در حال بارگذاری.\n- پیام‌های موفقیت و خطا به‌صورت واضح و قابل‌دسترس (aria-live).","due_date":"$nextFridayIso","project_type":null}]
 
 $exampleLabel: "برای اپ فروشگاه صفحه ورود با ایمیل و رمز، ورود با گوگل، و بازیابی رمز عبور رو بساز"
-[{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"صفحه ورود با ایمیل و رمز","task_description":"## شرح\nصفحه ورود کاربر با ایمیل و رمز عبور.\n\n## مشخصات فنی\n- فیلدهای ایمیل و رمز عبور با اعتبارسنجی؛ مدیریت خطای «اطلاعات نامعتبر».\n- وضعیت در حال ورود و غیرفعال‌سازی دکمه هنگام ارسال.\n\n## راهنمای طراحی (UI/UX)\n- فرم ساده و متمرکز با دکمه ورود اصلی و لینک «رمز را فراموش کرده‌اید؟».","due_date":null},{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"ورود با گوگل","task_description":"## شرح\nافزودن گزینه ورود/ثبت‌نام با حساب گوگل (OAuth).\n\n## مشخصات فنی\n- جریان OAuth گوگل و ساخت/اتصال حساب کاربر پس از بازگشت موفق.\n- مدیریت خطای لغو یا شکست احراز هویت.\n\n## راهنمای طراحی (UI/UX)\n- دکمه استاندارد «ورود با گوگل» زیر فرم ورود با جداکننده «یا».","due_date":null},{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"بازیابی رمز عبور","task_description":"## شرح\nجریان فراموشی و بازنشانی رمز عبور از طریق ایمیل.\n\n## مشخصات فنی\n- دریافت ایمیل، ارسال لینک بازنشانی، و صفحه تعیین رمز جدید با اعتبارسنجی.\n- انقضای لینک بازنشانی و مدیریت لینک نامعتبر.\n\n## راهنمای طراحی (UI/UX)\n- پیام تأیید ارسال ایمیل و بازخورد واضح برای موفقیت یا خطا.","due_date":null}]
+[{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"صفحه ورود با ایمیل و رمز","task_description":"## شرح\nصفحه ورود کاربر با ایمیل و رمز عبور.\n\n## مشخصات فنی\n- فیلدهای ایمیل و رمز عبور با اعتبارسنجی؛ مدیریت خطای «اطلاعات نامعتبر».\n- وضعیت در حال ورود و غیرفعال‌سازی دکمه هنگام ارسال.\n\n## راهنمای طراحی (UI/UX)\n- فرم ساده و متمرکز با دکمه ورود اصلی و لینک «رمز را فراموش کرده‌اید؟».","due_date":null,"project_type":null},{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"ورود با گوگل","task_description":"## شرح\nافزودن گزینه ورود/ثبت‌نام با حساب گوگل (OAuth).\n\n## مشخصات فنی\n- جریان OAuth گوگل و ساخت/اتصال حساب کاربر پس از بازگشت موفق.\n- مدیریت خطای لغو یا شکست احراز هویت.\n\n## راهنمای طراحی (UI/UX)\n- دکمه استاندارد «ورود با گوگل» زیر فرم ورود با جداکننده «یا».","due_date":null,"project_type":null},{"action_type":"add_task","project_name":"اپ فروشگاه","task_title":"بازیابی رمز عبور","task_description":"## شرح\nجریان فراموشی و بازنشانی رمز عبور از طریق ایمیل.\n\n## مشخصات فنی\n- دریافت ایمیل، ارسال لینک بازنشانی، و صفحه تعیین رمز جدید با اعتبارسنجی.\n- انقضای لینک بازنشانی و مدیریت لینک نامعتبر.\n\n## راهنمای طراحی (UI/UX)\n- پیام تأیید ارسال ایمیل و بازخورد واضح برای موفقیت یا خطا.","due_date":null,"project_type":null}]
 
 $exampleLabel: "تسک طراحی لوگو رو از پروژه وبسایت پاک کن"
-[{"action_type":"remove_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null}]
+[{"action_type":"remove_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null,"project_type":null}]
+
+$exampleLabel: "تسک طراحی لوگو رو ببند"
+[{"action_type":"complete_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null,"project_type":null}]
+
+$exampleLabel: "تسک طراحی لوگو هنوز تموم نشده، دوباره بازش کن"
+[{"action_type":"reopen_task","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":null,"project_type":null}]
+
+$exampleLabel: "مهلت تسک طراحی لوگو رو بذار جمعه آینده"
+[{"action_type":"set_due_date","project_name":"وبسایت","task_title":"طراحی لوگو","task_description":null,"due_date":"$nextFridayIso","project_type":null}]
         """.trimIndent()
     }
 

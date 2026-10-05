@@ -1,0 +1,50 @@
+# MIA's own CI. Not one of the files uploaded into generated repos — those live in
+# app/src/main/assets/ and are what this job checks.
+#
+# app/src/main/assets/ and docs/github/ hold the same files twice: the copy the app uploads into
+# every new repo, and the readable copy the documentation links to. docs/github/README.md §9 says
+# they must stay byte-for-byte identical, and until now nothing enforced it — so a workflow fixed
+# in one place and not the other would ship a documentation set describing agents that no longer
+# behave that way.
+#
+# It also guards the other property nobody can hold in their head: that the agent team cannot
+# leave a task without an owner. See scripts/check-loop-closure.sh.
+name: Assets ↔ docs in sync
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assets-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The pair list is derived from NetworkModule.BOOTSTRAP_ASSETS inside the script, so
+      # registering a new asset is all it takes for CI to start guarding it. The same script is
+      # what a developer runs locally before committing.
+      - name: Check that every managed file matches its copy
+        run: ./scripts/check-assets-sync.sh
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The handoff invariant: every state has an owner and an exit, every label is a state
+      # somebody watches, and no role can post a message without naming who acts next. A hole in
+      # any of those produces no error at runtime — an issue just stops moving — so it has to be
+      # caught here. The same run covers the skill layer, which is quiet in the same way: a
+      # malformed SKILL.md is skipped rather than reported, and a seat silently loses a procedure.
+      - name: Check that the agent loop cannot leave a task stranded
+        run: ./scripts/check-loop-closure.sh

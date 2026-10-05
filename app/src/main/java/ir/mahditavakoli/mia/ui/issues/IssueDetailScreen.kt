@@ -256,14 +256,13 @@ private fun IssueHeader(issue: RepoIssue) {
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                // Issue bodies are Markdown. MIA renders them as plain text rather than
-                // half-parsing them: the agent's briefs are mostly prose and lists, which stay
-                // readable, and a wrong parse would hide content the user needs to act on.
-                text = issue.body?.takeIf { it.isNotBlank() } ?: "این ایشو توضیحی ندارد.",
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+            // Rendered as Markdown, not plain text: the bodies the PO and QC agents write are
+            // tables and checkbox lists, and those were unreadable as literal pipes and brackets.
+            // The renderer never hides what it can't parse (see Markdown.kt), which is what makes
+            // it safe to use on text a model produced.
+            MarkdownText(
+                markdown = issue.body?.takeIf { it.isNotBlank() } ?: "این ایشو توضیحی ندارد.",
+                modifier = Modifier.padding(12.dp)
             )
         }
     }
@@ -314,11 +313,8 @@ private fun CommentCard(comment: IssueComment) {
                 )
             }
             Spacer(Modifier.height(6.dp))
-            Text(
-                text = comment.body,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            // The token reports, the PO's plan and QC's verdict table all arrive here.
+            MarkdownText(markdown = comment.body)
         }
     }
 }

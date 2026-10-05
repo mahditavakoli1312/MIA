@@ -1,12 +1,18 @@
 package ir.mahditavakoli.mia.security
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import ir.mahditavakoli.mia.BuildConfig
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
+import ir.mahditavakoli.mia.network.openrouter.AgentRole
 import ir.mahditavakoli.mia.network.openrouter.DEFAULT_TEXT_MODEL
 import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
+import java.io.IOException
+import java.security.GeneralSecurityException
+import java.security.KeyStore
 
 /**
  * Secure, on-device storage for secrets the user enters at runtime:
@@ -23,15 +29,7 @@ import ir.mahditavakoli.mia.network.openrouter.agentModelOrNull
  */
 class SecretStore(context: Context) {
 
-    private val prefs = EncryptedSharedPreferences.create(
-        context.applicationContext,
-        PREFS_NAME,
-        MasterKey.Builder(context.applicationContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val prefs = openPrefs(context.applicationContext)
 
     /** The Gemini API key: runtime override if present, else the build-time default, else null. */
     val geminiApiKey: String?
@@ -112,19 +110,51 @@ class SecretStore(context: Context) {
     /**
      * Which model the app's own typed-command pipeline runs on, chosen in Settings.
      *
-     * Separate from the per-repo agent model on purpose: that one lives in the repo's workflow
-     * files on GitHub and is picked per project, while this is a single device-local preference
-     * for the two calls MIA makes on the phone. An id that is no longer offered (a stale
-     * preference from an older build) falls back to [DEFAULT_TEXT_MODEL] rather than failing
-     * every command with a 404.
+     * Separate from the per-repo agent models on purpose: those live in each repo's workflow
+     * files on GitHub and are picked per project and per role, while this is a single
+     * device-local preference for the two calls MIA makes on the phone. Kept as a named property
+     * because that is how the command pipeline reads it; [AgentRole.APP] is the same value.
      */
     var textModelId: String
-        get() = prefs.getString(KEY_TEXT_MODEL, null)
+        get() = defaultModelFor(AgentRole.APP)
+        set(value) {
+            setDefaultModelFor(AgentRole.APP, value)
+        }
+
+    /**
+     * The model a role gets in a **newly created** project, and — for [AgentRole.APP] — the one
+     * MIA's own typed commands run on right now.
+     *
+     * Two different lifetimes behind one accessor, and that is the honest shape of it. [APP] has
+     * no repo side at all, so this preference *is* its setting and changing it takes effect on
+     * the next command. Every other role lives in a repo's workflow files, so this is only the
+     * value written into the next repo MIA creates; existing projects are changed from their own
+     * model screen, which commits to GitHub. The defaults screen says exactly this, because a
+     * user who expected the second meaning for the first role would be surprised twice.
+     *
+     * An id that is no longer offered (a stale preference from an older build) falls back to
+     * [DEFAULT_TEXT_MODEL] rather than failing every command with a 404.
+     */
+    fun defaultModelFor(role: AgentRole): String =
+        prefs.getString(defaultModelKey(role), null)
             ?.takeIf { id -> agentModelOrNull(id) != null }
             ?: DEFAULT_TEXT_MODEL
-        set(value) {
-            prefs.edit().putString(KEY_TEXT_MODEL, value).apply()
-        }
+
+    fun setDefaultModelFor(role: AgentRole, modelId: String) {
+        prefs.edit().putString(defaultModelKey(role), modelId).apply()
+    }
+
+    /** Every role's default in one read, which is what both model screens actually want. */
+    fun defaultModels(): Map<AgentRole, String> =
+        AgentRole.entries.associateWith { defaultModelFor(it) }
+
+    /**
+     * [AgentRole.APP] keeps the original `text_model_id` key rather than a role-shaped one, so
+     * a user who had already chosen an in-app model keeps it across this upgrade instead of
+     * being silently reset to the default.
+     */
+    private fun defaultModelKey(role: AgentRole): String =
+        if (role == AgentRole.APP) KEY_TEXT_MODEL else "$KEY_DEFAULT_MODEL_PREFIX${role.id}"
 
     /** Whether newly created tasks are handed to the agent (labeled "by-agent") by default. */
     var agentHandledByDefault: Boolean
@@ -133,13 +163,114 @@ class SecretStore(context: Context) {
             prefs.edit().putBoolean(KEY_AGENT_DEFAULT, value).apply()
         }
 
+    /**
+     * Whether an understood command is shown for approval before it is executed.
+     *
+     * Defaults to on: the model can mishear, and this is the last point at which a wrong
+     * delete_project costs nothing. Turning it off skips the sheet for ordinary commands only —
+     * destructive ones are confirmed regardless, so this preference cannot be used to arm a
+     * silent delete.
+     */
+    var confirmBeforeExecute: Boolean
+        get() = prefs.getBoolean(KEY_CONFIRM_BEFORE_EXECUTE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_CONFIRM_BEFORE_EXECUTE, value).apply()
+        }
+
+    /**
+     * A monthly ceiling on tokens, in tokens rather than dollars, and 0 for "no budget".
+     *
+     * Tokens because that is the number that actually exists for every actor here: the free
+     * OpenRouter models bill $0.00 and Gemini's own quota is not reported per call, so a dollar
+     * budget would sit at zero while the daily request cap was being hit. Tokens are what run out.
+     */
+    var monthlyTokenBudget: Int
+        get() = prefs.getInt(KEY_MONTHLY_TOKEN_BUDGET, 0)
+        set(value) {
+            prefs.edit().putInt(KEY_MONTHLY_TOKEN_BUDGET, value.coerceAtLeast(0)).apply()
+        }
+
     private companion object {
+        const val TAG = "MIA_SecretStore"
         const val PREFS_NAME = "mia_secrets"
         const val KEY_GEMINI = "gemini_api_key"
         const val KEY_OPENROUTER = "openrouter_api_key"
         const val KEY_OPENROUTER_FALLBACK = "openrouter_fallback_api_key"
         const val KEY_MINIMAX = "minimax_api_key"
         const val KEY_TEXT_MODEL = "text_model_id"
+
+        /**
+         * Per-role defaults for new projects: `default_model_tec`, `default_model_qc`, … The
+         * app's own model is deliberately NOT stored under this prefix — see [defaultModelKey].
+         */
+        const val KEY_DEFAULT_MODEL_PREFIX = "default_model_"
         const val KEY_AGENT_DEFAULT = "agent_handled_by_default"
+        const val KEY_CONFIRM_BEFORE_EXECUTE = "confirm_before_execute"
+        const val KEY_MONTHLY_TOKEN_BUDGET = "monthly_token_budget"
+
+        /**
+         * Opens the store, resetting it once if it can't be decrypted.
+         *
+         * [PREFS_NAME] holds both the secrets and the Tink keyset that protects them, and that
+         * keyset is itself sealed with a Keystore key that never leaves the device. So the file
+         * and the key can drift apart — a cloud backup or device-transfer restore brings the file
+         * to a phone whose Keystore has a different key, and clearing the lock screen can drop
+         * the key out from under a file that stays. Either way `create` fails on the keyset with
+         * an AEADBadTagException, which used to take [ir.mahditavakoli.mia.MIAApplication] down
+         * with it: an unrecoverable crash on every launch, on a store holding nothing that can't
+         * be typed in again.
+         *
+         * Wiping the file and the stale Keystore alias makes the next attempt build a fresh pair.
+         * The runtime keys are lost, but the app starts, falls back to its BuildConfig defaults,
+         * and Settings can take them again.
+         */
+        fun openPrefs(appContext: Context): SharedPreferences = try {
+            createPrefs(appContext)
+        } catch (e: GeneralSecurityException) {
+            resetAndCreatePrefs(appContext, e)
+        } catch (e: IOException) {
+            resetAndCreatePrefs(appContext, e)
+        }
+
+        fun createPrefs(appContext: Context): SharedPreferences =
+            EncryptedSharedPreferences.create(
+                appContext,
+                PREFS_NAME,
+                MasterKey.Builder(appContext)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+
+        /**
+         * Second and last attempt: if this one throws too, the Keystore is broken in a way we
+         * can't undo by deleting our own state, and crashing beats pretending secrets are stored.
+         */
+        fun resetAndCreatePrefs(appContext: Context, cause: Exception): SharedPreferences {
+            Log.w(TAG, "Secret store unreadable; resetting it. Saved API keys are lost.", cause)
+            appContext.deleteSharedPreferences(PREFS_NAME)
+            deleteMasterKey()
+            return createPrefs(appContext)
+        }
+
+        /**
+         * Drops the Keystore key behind [MasterKey], so the retry generates a new one. Failing to
+         * delete it is not fatal on its own: with the file gone the retry can still succeed by
+         * re-sealing a new keyset under the existing key.
+         */
+        fun deleteMasterKey() {
+            try {
+                KeyStore.getInstance(ANDROID_KEYSTORE)
+                    .apply { load(null) }
+                    .deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
+            } catch (e: GeneralSecurityException) {
+                Log.w(TAG, "Could not delete the master key", e)
+            } catch (e: IOException) {
+                Log.w(TAG, "Could not delete the master key", e)
+            }
+        }
+
+        const val ANDROID_KEYSTORE = "AndroidKeyStore"
     }
 }

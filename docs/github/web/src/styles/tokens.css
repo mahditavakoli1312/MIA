@@ -1,0 +1,115 @@
+/* Managed by MIA — do not edit by hand (kept byte-for-byte in sync with docs/github/). */
+
+/*
+ * The design tokens every page in this project measures itself with.
+ *
+ * They exist because a small model asked to "add a card" will otherwise invent 13px of padding on
+ * one page and 20px on the next, and nobody reviewing the diff will notice until the site looks
+ * like four people built it. A stylesheet that only ever names tokens cannot drift.
+ *
+ * Rule: a page or component style never writes a raw number or a raw colour. If a value is
+ * missing here, add it here.
+ *
+ * Plain CSS custom properties on purpose. This file has to still be correct after TEC scaffolds
+ * Vite, React, Vue, Astro, or nothing at all — a Tailwind config or a Sass map would be a bet on
+ * one of those, and every one of them can read a custom property.
+ *
+ * The scale is the same one MIA's own Android design system uses, so a product with both an app
+ * and a site measures the two the same way. 1rem = 16px; the px values in the comments are what
+ * each token is at the default root size.
+ */
+
+:root {
+  /* --- Spacing -----------------------------------------------------------------------------
+   * Four steps and two extremes, on a 4px grid. Deliberately small: a scale with ten steps is a
+   * scale nobody remembers, and the choice between 14 and 18 is exactly the choice that makes
+   * pages inconsistent. */
+  --space-xs: 0.25rem;   /*  4px — hairline gaps, between an icon and its own label */
+  --space-sm: 0.5rem;    /*  8px — inside a chip or a dense row */
+  --space-md: 0.75rem;   /* 12px — the default gap between two related things */
+  --space-lg: 1rem;      /* 16px — page padding, and the gap between two unrelated blocks */
+  --space-xl: 1.5rem;    /* 24px — between sections of a page */
+  --space-2xl: 2rem;     /* 32px — around an empty state, so it doesn't read as a mistake */
+
+  /* --- Radius ------------------------------------------------------------------------------
+   * Cards and sheets are soft; chips are pills. */
+  --radius-sm: 0.5rem;   /*  8px */
+  --radius-md: 0.75rem;  /* 12px */
+  --radius-lg: 1.25rem;  /* 20px */
+  --radius-pill: 999px;  /* anything that should read as a pill regardless of its height */
+
+  /* --- Elevation ---------------------------------------------------------------------------
+   * Used sparingly: this is a dark, flat design where a lifted surface reads as a lighter one
+   * rather than as a shadow. The shadows below are the faint ones that survive on a near-black
+   * ground; on the light theme they do the visible work instead. */
+  --elevation-flat: none;
+  --elevation-card: 0 1px 2px rgb(0 0 0 / 0.32);
+  --elevation-sheet: 0 6px 20px rgb(0 0 0 / 0.44);
+
+  /* --- Sizes -------------------------------------------------------------------------------
+   * So two pages never disagree about how big "an icon" is. */
+  --icon-sm: 1rem;       /* 16px */
+  --icon-md: 1.25rem;    /* 20px */
+  --icon-lg: 1.5rem;     /* 24px */
+
+  /* The smallest comfortable tap target. Never make a clickable thing smaller than this. */
+  --touch-target: 3rem;  /* 48px */
+
+  --divider-thickness: 1px;
+  --border-thickness: 1px;
+
+  /* --- Motion ------------------------------------------------------------------------------
+   * One duration for state changes, one for things entering or leaving, one easing curve.
+   * Everything animated on this site uses one of these, so nothing feels faster or slower than
+   * the rest of it for no reason. */
+  --motion-quick: 150ms;
+  --motion-standard: 250ms;
+  --motion-slow: 400ms;
+
+  /* Material's standard easing: fast out, slow in. */
+  --motion-easing: cubic-bezier(0.2, 0, 0, 1);
+
+  /* --- Type --------------------------------------------------------------------------------
+   * Persian needs more line height than Latin at the same size — the descenders and the
+   * diacritics collide otherwise — so every step here is roomier than a Latin-first scale.
+   *
+   * The stack names Vazirmatn first and falls through to the system UI font, so the site is
+   * correct before anyone adds a font file and better the moment someone does. To adopt it, add
+   * one @font-face block (or the Google Fonts link) — nothing else here names a family. */
+  --font-family: Vazirmatn, "Segoe UI", Roboto, system-ui, -apple-system, sans-serif;
+
+  /* Monospace is for code and for anything that must not be mirrored by RTL. */
+  --font-family-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, monospace;
+
+  --text-headline: 1.5rem;    /* 24px / 32px */
+  --text-headline-lh: 2rem;
+  --text-title-lg: 1.25rem;   /* 20px / 28px */
+  --text-title-lg-lh: 1.75rem;
+  --text-title-md: 1.0625rem; /* 17px / 24px */
+  --text-title-md-lh: 1.5rem;
+  --text-title-sm: 0.9375rem; /* 15px / 22px */
+  --text-title-sm-lh: 1.375rem;
+  --text-body-lg: 1rem;       /* 16px / 26px */
+  --text-body-lg-lh: 1.625rem;
+  --text-body-md: 0.875rem;   /* 14px / 24px */
+  --text-body-md-lh: 1.5rem;
+  --text-body-sm: 0.75rem;    /* 12px / 20px */
+  --text-body-sm-lh: 1.25rem;
+  --text-label: 0.875rem;     /* 14px / 20px */
+  --text-label-lh: 1.25rem;
+  --text-label-sm: 0.75rem;   /* 12px / 16px */
+  --text-label-sm-lh: 1rem;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* --- Layout ------------------------------------------------------------------------------ */
+
+  /* The widest a column of text may get before it becomes hard to read. */
+  --measure: 68ch;
+
+  /* The page's own maximum width, so content does not stretch across a desktop monitor. */
+  --page-max: 72rem; /* 1152px */
+}

@@ -7,6 +7,7 @@ import ir.mahditavakoli.mia.network.github.ContentFile
 import ir.mahditavakoli.mia.network.github.CreateRepoBody
 import ir.mahditavakoli.mia.network.github.GenerateFromTemplateBody
 import ir.mahditavakoli.mia.network.github.GitHubApi
+import ir.mahditavakoli.mia.network.github.GitHubCommit
 import ir.mahditavakoli.mia.network.github.GitHubIssueComment
 import ir.mahditavakoli.mia.network.github.GitHubIssueDetail
 import ir.mahditavakoli.mia.network.github.GitHubLabel
@@ -16,6 +17,8 @@ import ir.mahditavakoli.mia.network.github.GitHubUser
 import ir.mahditavakoli.mia.network.github.PutContentBody
 import ir.mahditavakoli.mia.network.github.PutSecretBody
 import ir.mahditavakoli.mia.network.github.RepoPublicKey
+import ir.mahditavakoli.mia.network.github.UpdateIssueBody
+import ir.mahditavakoli.mia.network.github.WorkflowPermissions
 import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.Response
 
@@ -53,6 +56,16 @@ class FakeGitHubApi : GitHubApi {
 
     /** Comments this repo holds, keyed by issue number and kept oldest-first. */
     val issueComments = mutableMapOf<Int, MutableList<GitHubIssueComment>>()
+
+    /** Commits this repo holds, newest first — where TEC's `Token-Spend:` trailers live. */
+    val commits = mutableListOf<GitHubCommit>()
+
+    /**
+     * Repo names whose commit / comment reads throw, which is what a repo that was never created
+     * — or was renamed out from under a project — looks like to the spend screen.
+     */
+    var failCommitsFor: String? = null
+    var failCommentsFor: String? = null
 
     // Response controls (default: everything succeeds).
     var putContentResponse: () -> Response<Unit> = { Response.success(Unit) }
@@ -133,6 +146,47 @@ class FakeGitHubApi : GitHubApi {
         return matching.drop((page - 1) * perPage).take(perPage)
     }
 
+    /**
+     * `since` is applied only as "was this issue passed to the fake as updated" — the fake keeps
+     * no per-issue updated_at, so tests that care about the window assert on the argument
+     * recorded here instead.
+     */
+    val listedSince = mutableListOf<String>()
+
+    override suspend fun listIssuesUpdatedSince(
+        owner: String,
+        repo: String,
+        state: String,
+        since: String,
+        perPage: Int,
+        page: Int
+    ): List<GitHubIssueDetail> {
+        listedSince += since
+        return listIssues(owner, repo, state, perPage, page)
+    }
+
+    /** Every state PATCH, in order: issue number to the state it was moved to. */
+    val issueStateUpdates = mutableListOf<Pair<Int, String>>()
+
+    var updateIssueResponse: () -> Response<Unit> = { Response.success(Unit) }
+
+    override suspend fun updateIssue(
+        owner: String,
+        repo: String,
+        number: Int,
+        body: UpdateIssueBody
+    ): Response<Unit> {
+        issueStateUpdates += number to body.state
+        val response = updateIssueResponse()
+        // Only a successful PATCH moves the stored issue, so a test that fails the call still
+        // sees the old state on a re-read — as it would against the real API.
+        if (response.isSuccessful) {
+            val index = issues.indexOfFirst { it.number == number }
+            if (index >= 0) issues[index] = issues[index].copy(state = body.state)
+        }
+        return response
+    }
+
     override suspend fun getIssue(owner: String, repo: String, number: Int): GitHubIssueDetail =
         issues.firstOrNull { it.number == number }
             ?: throw NoSuchElementException("no issue #$number")
@@ -145,6 +199,40 @@ class FakeGitHubApi : GitHubApi {
         page: Int
     ): List<GitHubIssueComment> =
         issueComments[number].orEmpty().drop((page - 1) * perPage).take(perPage)
+
+    /**
+     * The repo-wide comment feed, which the spend screen reads instead of one request per issue.
+     * Flattened from [issueComments] so a test that seeds a thread gets it here too, and stamped
+     * with the `issue_url` GitHub sends on this endpoint — that field is the only thing tying a
+     * comment back to its issue once the issue number is no longer in the request.
+     */
+    override suspend fun listRepoIssueComments(
+        owner: String,
+        repo: String,
+        perPage: Int,
+        page: Int,
+        sort: String,
+        direction: String
+    ): List<GitHubIssueComment> {
+        if (repo == failCommentsFor) throw IllegalStateException("no repo $repo")
+        return issueComments.entries
+            .sortedBy { it.key }
+            .flatMap { (number, thread) ->
+                thread.map { it.copy(issueUrl = "https://api.github.com/repos/$owner/$repo/issues/$number") }
+            }
+            .drop((page - 1) * perPage)
+            .take(perPage)
+    }
+
+    override suspend fun listCommits(
+        owner: String,
+        repo: String,
+        perPage: Int,
+        page: Int
+    ): List<GitHubCommit> {
+        if (repo == failCommitsFor) throw IllegalStateException("no repo $repo")
+        return commits.drop((page - 1) * perPage).take(perPage)
+    }
 
     override suspend fun createIssueComment(
         owner: String,
@@ -192,6 +280,21 @@ class FakeGitHubApi : GitHubApi {
         return labelResponse(body)
     }
 
+    /** Every workflow-permissions block written, in order. */
+    val putWorkflowPermissions = mutableListOf<WorkflowPermissions>()
+
+    /** What the repo's Actions settings currently say. Tests override it to start "off". */
+    var workflowPermissionsResponse: () -> Response<WorkflowPermissions> = {
+        Response.success(
+            WorkflowPermissions(
+                defaultWorkflowPermissions = "read",
+                canApprovePullRequestReviews = false
+            )
+        )
+    }
+
+    var putWorkflowPermissionsResponse: () -> Response<Unit> = { Response.success(Unit) }
+
     override suspend fun getRepoPublicKey(owner: String, repo: String): RepoPublicKey = publicKey
 
     override suspend fun putActionsSecret(
@@ -204,6 +307,20 @@ class FakeGitHubApi : GitHubApi {
         putSecretBody = body
         putSecrets += name to body
         return putSecretResponse(name)
+    }
+
+    override suspend fun getWorkflowPermissions(
+        owner: String,
+        repo: String
+    ): Response<WorkflowPermissions> = workflowPermissionsResponse()
+
+    override suspend fun putWorkflowPermissions(
+        owner: String,
+        repo: String,
+        body: WorkflowPermissions
+    ): Response<Unit> {
+        putWorkflowPermissions += body
+        return putWorkflowPermissionsResponse()
     }
 
     companion object {

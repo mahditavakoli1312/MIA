@@ -5,6 +5,12 @@
 # your own MiniMax account — answers from that role's perspective and posts one
 # reply. These roles only ADVISE — "@tec" is handled by agent-issue-worker.yml, which
 # actually clones, develops, and merges a fix.
+#
+# It carries one more job, which is not advice at all: a human reply on a PAUSED issue restarts
+# the work. When the team asks a question it cannot answer itself (`needs-human`), someone
+# eventually answers it in a comment — and before this, that answer sat there while the issue
+# stayed paused, because the label came off only if the person also remembered to type `@tec`.
+# Nobody should have to know the label protocol to unpause their own project.
 name: AI Role Review (PO / QC)
 
 on:
@@ -15,8 +21,38 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  # Both jobs below can put an issue back in TEC's queue, and a label applied with GITHUB_TOKEN
+  # starts no workflow run. They dispatch the drain themselves so "@tec — شروع کن" is true when
+  # it is written, rather than up to thirty minutes later.
+  actions: write
 
 jobs:
+  # Runs before the advisory job and independently of it: an answer to a paused issue is usually
+  # a plain sentence, with no role tagged in it at all.
+  resume:
+    runs-on: ubuntu-latest
+    if: >
+      github.event.comment.user.type != 'Bot' &&
+      github.event.issue.state == 'open' &&
+      contains(github.event.issue.labels.*.name, 'needs-human')
+    steps:
+      - name: Take the answer and put the work back in the queue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label needs-human --add-label by-agent || true
+          gh issue comment "$ISSUE_NUMBER" --body "$(printf '%s\n\n---\n\n%s\n%s\n' \
+            '🧭 ممنون — همین را می‌گذارم مبنای کار و ادامه می‌دهیم.' \
+            '**قدم بعدی:** @tec — با توجه به این جواب، کار را از سر بگیر.' \
+            '<!-- mia:handoff v=1 from=po to=tec next="کار را با جواب تازه از سر بگیر" issue='"$ISSUE_NUMBER"' sla=60m -->')" || true
+          # …and actually call @tec. The label above was applied with GITHUB_TOKEN, which starts
+          # no workflow run, so the sentence "کار را از سر بگیر" would otherwise be a promise the
+          # repo keeps up to thirty minutes late.
+          gh workflow run agent-issue-worker.yml >/dev/null 2>&1 \
+            && echo "Dispatched a TEC drain — the answer resumes the work immediately." \
+            || echo "::warning::Could not dispatch the drain; the scheduled one picks it up."
+
   respond:
     runs-on: ubuntu-latest
     # Skip the bot's own comments (avoid loops) and only run when @po or @qc is tagged.
@@ -42,17 +78,30 @@ jobs:
           OPENROUTER_API_KEY_FALLBACK: ${{ secrets.OPENROUTER_API_KEY_FALLBACK }}
           # Read only when AGENT_PROVIDER is "minimax".
           MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
-          # Same model as TEC; override with an AGENT_MODEL repo variable.
-          # (Raw model id — NO provider prefix here: unlike the TEC workflow, this script
+          # Optional. Only the GLM vision/OCR/image skills read it, and skills.js does not
+          # even OFFER a skill whose key is unset — so an empty secret here is a smaller
+          # skill list, not a failure.
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          # A model PER ROLE. @po and @qc answer the same comment from different seats, so
+          # each reads its own AGENT_MODEL_<ROLE>, falls back to the repo-wide AGENT_MODEL,
+          # and finally to the literal default below — which is what the MIA app's model
+          # management screen rewrites when you point one role somewhere else.
+          # (Raw model ids — NO provider prefix here: unlike the TEC workflow, this script
           # calls the provider's API directly and sends the value verbatim.)
-          AGENT_MODEL: ${{ vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
-          # Which service that id belongs to, and therefore which key above to spend and which
-          # host to call. Must always be changed together with AGENT_MODEL.
-          AGENT_PROVIDER: ${{ vars.AGENT_PROVIDER || 'openrouter' }}
+          AGENT_MODEL_PO: ${{ vars.AGENT_MODEL_PO || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          AGENT_MODEL_QC: ${{ vars.AGENT_MODEL_QC || vars.AGENT_MODEL || 'minimax/minimax-m3:free' }}
+          # Which service each id belongs to, and therefore which key above to spend and which
+          # host to call. A role's provider must always be changed together with its model.
+          AGENT_PROVIDER_PO: ${{ vars.AGENT_PROVIDER_PO || vars.AGENT_PROVIDER || 'openrouter' }}
+          AGENT_PROVIDER_QC: ${{ vars.AGENT_PROVIDER_QC || vars.AGENT_PROVIDER || 'openrouter' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           REPO: ${{ github.repository }}
+          # When the PO writes a ready-to-implement brief, put it on the issue and queue it
+          # instead of asking a human to relay it. Set the repo variable to "false" on a project
+          # where every brief should be read by a person first.
+          AGENT_AUTO_QUEUE: ${{ vars.AGENT_AUTO_QUEUE }}
         run: node .github/scripts/ai-role-review.js

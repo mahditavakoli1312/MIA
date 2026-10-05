@@ -1,5 +1,6 @@
 package ir.mahditavakoli.mia.data.repository
 
+import ir.mahditavakoli.mia.data.model.ProjectType
 import ir.mahditavakoli.mia.network.github.CreateLabelBody
 import ir.mahditavakoli.mia.network.github.CreateRepoBody
 import ir.mahditavakoli.mia.network.github.GenerateFromTemplateBody
@@ -8,6 +9,7 @@ import ir.mahditavakoli.mia.network.github.GitHubRepo
 import ir.mahditavakoli.mia.network.github.PutContentBody
 import ir.mahditavakoli.mia.network.github.PutSecretBody
 import ir.mahditavakoli.mia.network.github.RepoPublicKey
+import ir.mahditavakoli.mia.network.github.WorkflowPermissions
 import ir.mahditavakoli.mia.network.openrouter.AgentProvider
 
 /** Turns bytes into a base64 string. Abstracted so unit tests avoid `android.util.Base64`. */
@@ -38,11 +40,13 @@ data class BootstrapFile(val repoPath: String, val content: String)
 /**
  * Wires a freshly created repository up to the whole MIA "AI team":
  *   1. creates the repo (plain, or from [MIA_TEMPLATE_REPO] if set),
- *   2. commits the [files] — the TEC coding agent, the PO/QC advisor workflow + script, the
- *      add-to-project and CI workflows (skipped for the template route, since the template
- *      already carries them),
- *   3. creates the `by-agent` / `done` labels,
- *   4. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
+ *   2. turns on "Allow GitHub Actions to create and approve pull requests", without which TEC
+ *      can commit a branch but not open the pull request that carries it,
+ *   3. commits the [files] — the TEC coding agent, the PO/QC advisor workflow + script, the PO
+ *      brief decomposer, the add-to-project and CI workflows (skipped for the template route,
+ *      since the template already carries them),
+ *   4. creates the queue and brief labels (see [LABELS]),
+ *   5. stores the caller's OpenRouter API key as the `OPENROUTER_API_KEY` Actions secret
  *      (the free-model key that powers CI + PO + TEC + QC), plus the spare key as
  *      `OPENROUTER_API_KEY_FALLBACK` for the workflows to switch to on a 429, and the MiniMax
  *      key as `MINIMAX_API_KEY` so the repo can be repointed at a paid MiniMax model later
@@ -56,7 +60,8 @@ class RepoBootstrapper(
     private val api: GitHubApi,
     private val base64: Base64Encoder,
     private val encryptor: SecretEncryptor,
-    private val files: List<BootstrapFile>,
+    /** The files a new repo of a given kind gets — see [ProjectType]. */
+    private val files: (ProjectType) -> List<BootstrapFile>,
     private val templateRepo: String = MIA_TEMPLATE_REPO
 ) {
 
@@ -72,6 +77,9 @@ class RepoBootstrapper(
      * @param miniMaxApiKey the MiniMax platform key, stored so that switching this repo to a
      *        MiniMax model in the picker later just works. Optional and non-fatal: a repo on a
      *        free OpenRouter model never reads it.
+     * @param projectType what kind of product this repo will hold, which decides the conventions
+     *        file and the design system that land in it. The `.github/` machinery does not vary:
+     *        those workflows detect what they are looking at on their own.
      */
     suspend fun bootstrap(
         owner: String,
@@ -80,7 +88,8 @@ class RepoBootstrapper(
         private: Boolean,
         agentApiKey: String?,
         agentFallbackApiKey: String? = null,
-        miniMaxApiKey: String? = null
+        miniMaxApiKey: String? = null,
+        projectType: ProjectType = ProjectType.DEFAULT
     ): Result {
         val useTemplate = templateRepo.isNotBlank()
         val repo = if (useTemplate) {
@@ -96,9 +105,21 @@ class RepoBootstrapper(
 
         val warnings = mutableListOf<String>()
 
-        // 1. Team files — only when we didn't clone a template that already carries them.
+        // 2. Let Actions open pull requests. First, and outside the template branch, because it
+        // is the one setting TEC cannot work around: without it `gh pr create` is refused and
+        // every issue ends as a pushed branch with an apologetic comment. Doing it before the
+        // workflow files land also means the switch is already on if uploading them triggers a
+        // run. Best-effort like everything else after creation — an org that forbids it wins,
+        // and the warning says so.
+        allowActionsToOpenPullRequests(owner, repo.name)?.let { warnings += it }
+
+        // 3. Team files — only when we didn't clone a template that already carries them.
         if (!useTemplate) {
-            for (file in files) {
+            // Read per bootstrap, not once at construction: the files carry the per-role model
+            // defaults the user has chosen, and those can change between two projects being
+            // created without the app being restarted — and the set itself now depends on the
+            // kind of project being created.
+            for (file in files(projectType)) {
                 runCatching {
                     val response = api.putContent(
                         owner = owner,
@@ -114,7 +135,7 @@ class RepoBootstrapper(
             }
         }
 
-        // 2. Labels — 422 means it already exists, which is fine.
+        // 4. Labels — 422 means it already exists, which is fine.
         for ((label, color) in LABELS) {
             runCatching {
                 val response = api.createLabel(owner, repo.name, CreateLabelBody(name = label, color = color))
@@ -122,7 +143,7 @@ class RepoBootstrapper(
             }.onFailure { warnings += "label «$label» failed (${it.message})" }
         }
 
-        // 3. Model API key secrets (used by the OpenCode agent in the workflow). All are sealed
+        // 5. Model API key secrets (used by the OpenCode agent in the workflow). All are sealed
         // against the same repo public key, so fetch it once and reuse it.
         if (agentApiKey.isNullOrBlank() && miniMaxApiKey.isNullOrBlank()) {
             warnings += "OPENROUTER_API_KEY not set — add it in Settings so the agent can run"
@@ -154,6 +175,47 @@ class RepoBootstrapper(
 
         return Result(repo, warnings)
     }
+
+    /**
+     * Turns on "Allow GitHub Actions to create and approve pull requests" for [repo], returning
+     * null on success and a warning line otherwise.
+     *
+     * TEC's whole output is a pull request. The `GITHUB_TOKEN` it runs under is refused
+     * `gh pr create` while this repository setting is off — not by the workflow's own
+     * `permissions:` block, which already asks for `pull-requests: write`, but by the account
+     * setting above it — so a fresh repo would do all of the work, push the branch, and then
+     * comment that a human has to go and flip a switch in Settings before any of it can land.
+     *
+     * The current block is read first so that `default_workflow_permissions` can be written
+     * back exactly as found. That field is not MIA's business: every workflow MIA installs
+     * declares its own `permissions:`, so the default never applies to them, and a user who
+     * has deliberately set their repos to a read-only default should not have it widened as a
+     * side effect of creating a project.
+     *
+     * Never throws. An organization can forbid this setting outright, and a fine-grained token
+     * may lack the administration scope; both are worth a warning and neither is worth failing
+     * a repo that is otherwise fully wired up.
+     */
+    private suspend fun allowActionsToOpenPullRequests(owner: String, repo: String): String? =
+        runCatching {
+            val current = api.getWorkflowPermissions(owner, repo).body()
+            if (current?.canApprovePullRequestReviews == true) return null
+            val response = api.putWorkflowPermissions(
+                owner = owner,
+                repo = repo,
+                body = WorkflowPermissions(
+                    // Null when the read failed; GitHub then leaves the field as it is.
+                    defaultWorkflowPermissions = current?.defaultWorkflowPermissions,
+                    canApprovePullRequestReviews = true
+                )
+            )
+            check(response.isSuccessful) { "HTTP ${response.code()}" }
+            null
+        }.getOrElse {
+            "could not allow Actions to open pull requests (${it.message}) — " +
+                "enable it in Settings → Actions → General → Workflow permissions, " +
+                "or TEC will push a branch but not open a PR"
+        }
 
     /**
      * Stores one provider's API key on an *existing* repo, for the model picker: repointing a
@@ -216,16 +278,34 @@ class RepoBootstrapper(
         const val MINIMAX_SECRET_NAME = "MINIMAX_API_KEY"
 
         /**
-         * The labels the agent queue runs on, created up front so the workflow can move an
-         * issue between them (adding a label to an issue does not create a missing one).
-         * `by-agent` means queued, `agent-running` means claimed, and the last two are the two
-         * ways it ends. GitHub label colors are 6-digit hex without a leading '#'.
+         * The labels the pipeline runs on, created up front so the workflows can move an issue
+         * between them (adding a label to an issue does not create a missing one). GitHub label
+         * colors are 6-digit hex without a leading '#'.
+         *
+         * The first four are the TEC queue: `by-agent` means queued, `agent-running` means
+         * claimed, and the next two are the ways it ends. Then the brief pipeline: `brief` is an
+         * intent waiting to be decomposed, `brief-planned`/`brief-failed` are how that ended, and
+         * `blocked` marks a child issue whose prerequisites have not landed. The last four are the
+         * QC gate on TEC's pull requests: `qc-approved` / `qc-skipped` let a merge through,
+         * `needs-rework` sends the issue back for another attempt, `needs-po` hands it to the PO
+         * to re-scope once two attempts were not enough — which is how the loop keeps going
+         * instead of dropping the work — and `needs-human` is the one label that takes an issue
+         * out of the queue, reached only when a repo set an `AGENT_MAX_CYCLES` ceiling.
          */
         val LABELS = listOf(
             "by-agent" to "1d76db",
             "agent-running" to "fbca04",
             "agent-failed" to "b60205",
-            "done" to "0e8a16"
+            "done" to "0e8a16",
+            "brief" to "6f42c1",
+            "brief-planned" to "5319e7",
+            "brief-failed" to "b60205",
+            "blocked" to "d93f0b",
+            "qc-approved" to "0e8a16",
+            "qc-skipped" to "bfd4f2",
+            "needs-rework" to "d93f0b",
+            "needs-po" to "5319e7",
+            "needs-human" to "b60205"
         )
     }
 }
